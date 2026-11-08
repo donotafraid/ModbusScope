@@ -1,0 +1,17 @@
+# Portable clangd configuration: no developer-specific absolute paths.
+# Configure a build first (quickstart.sh writes build/compile_commands.json).
+CompileFlags:
+  Add:
+    - -std=gnu++17
+    - -isystem
+    - /usr/include/c++/11
+    - -isystem
+    - /usr/include/x86_64-linux-gnu/c++/11
+    - -isystem
+    - /usr/include/c++/11/backward
+    - -isystem
+    - /usr/lib/gcc/x86_64-linux-gnu/11/include
+  CompilationDatabase: build
+
+Index:
+  Background: Build

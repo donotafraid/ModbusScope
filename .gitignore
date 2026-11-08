@@ -1,0 +1,37 @@
+# 忽略 logs 目录下所有内容
+logs/
+.cache/
+conan_debug_build/
+conan_release_build/
+build_log.txt
+bin/
+build-asan/
+build-lsan/
+build-tsan/
+build-bench/
+conan_bench_build/
+# Keep every build tree, IDE file and compile database out of the repository.
+# `build-bench/` was accidentally committed once; the pattern below
+# prevents a repeat. CMake commands in README/docs use `build` / `build-*`.
+build*/
+compile_commands.json
+CMakeUserPresets.json
+.idea/
+.vscode/
+*.Zone.Identifier
+# Keep the SLO archives cited by docs/benchmark.md auditable; other run
+# output stays local.
+bench-results/*
+!bench-results/20261029_141357_slo/
+!bench-results/20261029_141357_slo/**
+!bench-results/20261030_083718_slo/
+!bench-results/20261030_083718_slo/**
+!bench-results/20261030_141909_slo/
+!bench-results/20261030_141909_slo/**
+conan_build/
+build/
+third_party/
+sanitizer-logs/
+code_review/
+test-simultaneously/
+clang编译文件backup/

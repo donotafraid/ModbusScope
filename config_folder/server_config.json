@@ -1,0 +1,12 @@
+{
+    "broker_address": "172.28.80.1",
+    "client_id": "Server_MQTT",
+    "persistence_type": 1,
+    "persistence_context": "NONE",
+    "topicName": "datasheet",
+    "max_inflight_number": 20,
+    "max_queue_size": 2000,
+    "qos_grade": 1,
+    "retain_grade" : 0,
+    "port": 1883
+}

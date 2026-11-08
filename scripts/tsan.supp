@@ -1,0 +1,7 @@
+# glibc tzset_internal / __tzstring 已知非线程安全初始化
+race:tzset_internal
+race:__tzstring
+
+# open62541 v1.4.14 server init vs iterate 的锁顺序反转
+deadlock:UA_Timer
+deadlock:lockServer

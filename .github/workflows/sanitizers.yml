@@ -1,0 +1,426 @@
+name: sanitizers
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  OPEN62541_VERSION: v1.4.14
+
+jobs:
+  # ============================================================
+  # 单独一个 job 构建 open62541 + Conan 依赖，并保存缓存
+  # ============================================================
+  build-open62541:
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查文档引用的 benchmark 归档是否存在
+        run: python3 scripts/check_bench_refs.py
+
+      - name: 检查 1T p99.9 的 15 次 CI 上界与 capacity 下限
+        run: |
+          python3 scripts/check_bench_slo.py \
+            bench-results/20261030_141909_slo/median.txt \
+            --profile capacity --require-errors \
+            --ci-upper-ms 1.0 --min-runs 15
+
+      - name: 输出被测 SHA
+        run: |
+          echo "本次运行 SHA: ${{ github.sha }}"
+
+      - name: 安装 Clang 17、libc++、ccache、Conan
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
+          pip install "conan>=2,<3"
+          mkdir -p ~/.conan2/profiles
+          cat > ~/.conan2/profiles/default <<'EOF'
+          [settings]
+          os=Linux
+          arch=x86_64
+          build_type=Debug
+          compiler=clang
+          compiler.version=17
+          compiler.cppstd=gnu17
+          compiler.libcxx=libc++
+          EOF
+
+      - name: 恢复 open62541 缓存
+        id: cache-o6
+        uses: actions/cache@v4
+        with:
+          path: third_party/open62541-v1.4.14
+          key: open62541-${{ env.OPEN62541_VERSION }}-ubuntu22-clang17-${{ hashFiles('scripts/build_open62541.sh') }}
+
+      - name: 构建 open62541（缓存未命中时）
+        if: steps.cache-o6.outputs.cache-hit != 'true'
+        run: bash scripts/build_open62541.sh third_party/open62541-v1.4.14
+
+      - name: 恢复 Conan 缓存 (~/.conan2)
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2
+          key: conan2-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+
+      - name: 恢复 conan_debug_build 缓存
+        uses: actions/cache@v4
+        with:
+          path: conan_debug_build
+          key: conan-debug-build-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+
+      - name: 安装 Conan 依赖
+        run: conan install . -of conan_debug_build -s build_type=Debug --build=missing
+
+  # ============================================================
+  # ASan + UBSan
+  # ============================================================
+  asan:
+    needs: build-open62541
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 输出被测 SHA
+        run: |
+          echo "本次运行 SHA: ${{ github.sha }}"
+
+      - name: 安装 Clang 17、libc++、ccache
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: 恢复 open62541 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/open62541-v1.4.14
+          key: open62541-${{ env.OPEN62541_VERSION }}-ubuntu22-clang17-${{ hashFiles('scripts/build_open62541.sh') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 Conan 缓存 (~/.conan2)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2
+          key: conan2-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 conan_debug_build 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: conan_debug_build
+          key: conan-debug-build-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 检查 open62541 产物
+        run: |
+          set -e
+          ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14
+          test -f "${ROOT}/include/open62541/client_highlevel.h" || { echo "缺 client_highlevel.h"; exit 1; }
+          test -f "${ROOT}/build/src_generated/open62541/config.h" || { echo "缺 src_generated"; exit 1; }
+          test -f "${ROOT}/build/bin/libopen62541.so" || { echo "缺 libopen62541.so"; exit 1; }
+          echo "open62541 就绪"
+
+      - name: 恢复 ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-clang17-asan-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang17-asan-
+
+      - name: 配置 ASan
+        run: |
+          cmake -B build-asan -DENABLE_ASAN=ON -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake \
+                -DOPEN62541_ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14 \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: 构建 ASan
+        run: cmake --build build-asan -j
+
+      - name: 清理旧 ASan 日志
+        run: rm -rf build-asan/asan_logs
+
+      - name: 运行 ASan + UBSan
+        run: ./scripts/run_asan.sh
+
+      - name: 上传 ASan 日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-logs-${{ github.sha }}
+          path: build-asan/asan_logs/
+
+  # ============================================================
+  # LSan
+  # ============================================================
+  lsan:
+    needs: build-open62541
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 输出被测 SHA
+        run: |
+          echo "本次运行 SHA: ${{ github.sha }}"
+
+      - name: 安装 Clang 17、libc++、ccache
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: 恢复 open62541 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/open62541-v1.4.14
+          key: open62541-${{ env.OPEN62541_VERSION }}-ubuntu22-clang17-${{ hashFiles('scripts/build_open62541.sh') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 Conan 缓存 (~/.conan2)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2
+          key: conan2-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 conan_debug_build 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: conan_debug_build
+          key: conan-debug-build-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 检查 open62541 产物
+        run: |
+          set -e
+          ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14
+          test -f "${ROOT}/include/open62541/client_highlevel.h" || { echo "缺 client_highlevel.h"; exit 1; }
+          test -f "${ROOT}/build/src_generated/open62541/config.h" || { echo "缺 src_generated"; exit 1; }
+          test -f "${ROOT}/build/bin/libopen62541.so" || { echo "缺 libopen62541.so"; exit 1; }
+          echo "open62541 就绪"
+
+      - name: 恢复 ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-clang17-lsan-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang17-lsan-
+
+      - name: 配置 LSan
+        run: |
+          cmake -B build-lsan -DENABLE_LSAN=ON -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake \
+                -DOPEN62541_ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14 \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: 构建 LSan
+        run: cmake --build build-lsan -j
+
+      - name: 清理旧 LSan 日志
+        run: rm -rf build-lsan/lsan_logs
+
+      - name: 运行 LSan
+        run: ./scripts/run_lsan.sh
+
+      - name: 上传 LSan 日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsan-logs-${{ github.sha }}
+          path: build-lsan/lsan_logs/
+
+  # ============================================================
+  # TSan
+  # ============================================================
+  tsan:
+    needs: build-open62541
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 输出被测 SHA
+        run: |
+          echo "本次运行 SHA: ${{ github.sha }}"
+
+      - name: 安装 Clang 17、libc++、ccache
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: 恢复 open62541 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/open62541-v1.4.14
+          key: open62541-${{ env.OPEN62541_VERSION }}-ubuntu22-clang17-${{ hashFiles('scripts/build_open62541.sh') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 Conan 缓存 (~/.conan2)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2
+          key: conan2-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 conan_debug_build 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: conan_debug_build
+          key: conan-debug-build-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 检查 open62541 产物
+        run: |
+          set -e
+          ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14
+          test -f "${ROOT}/include/open62541/client_highlevel.h" || { echo "缺 client_highlevel.h"; exit 1; }
+          test -f "${ROOT}/build/src_generated/open62541/config.h" || { echo "缺 src_generated"; exit 1; }
+          test -f "${ROOT}/build/bin/libopen62541.so" || { echo "缺 libopen62541.so"; exit 1; }
+          echo "open62541 就绪"
+
+      - name: 恢复 ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-clang17-tsan-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang17-tsan-
+
+      - name: 配置 TSan
+        run: |
+          cmake -B build-tsan -DENABLE_TSAN=ON -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake \
+                -DOPEN62541_ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14 \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: 构建 TSan
+        run: cmake --build build-tsan -j
+
+      - name: 清理旧 TSan 日志
+        run: rm -rf build-tsan/tsan_logs
+
+      - name: 运行 TSan
+        run: ./scripts/run_tsan.sh
+
+      - name: 上传 TSan 日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-logs-${{ github.sha }}
+          path: build-tsan/tsan_logs/
+
+  # ============================================================
+  # 功能回归 + 抖 flaky
+  # ============================================================
+  flaky:
+    needs: build-open62541
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 输出被测 SHA
+        run: |
+          echo "本次运行 SHA: ${{ github.sha }}"
+
+      - name: 安装 Clang 17、libc++、ccache
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: 恢复 open62541 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/open62541-v1.4.14
+          key: open62541-${{ env.OPEN62541_VERSION }}-ubuntu22-clang17-${{ hashFiles('scripts/build_open62541.sh') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 Conan 缓存 (~/.conan2)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2
+          key: conan2-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 恢复 conan_debug_build 缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: conan_debug_build
+          key: conan-debug-build-${{ runner.os }}-clang17-${{ hashFiles('conanfile.*') }}
+          fail-on-cache-miss: true
+
+      - name: 检查 open62541 产物
+        run: |
+          set -e
+          ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14
+          test -f "${ROOT}/include/open62541/client_highlevel.h" || { echo "缺 client_highlevel.h"; exit 1; }
+          test -f "${ROOT}/build/src_generated/open62541/config.h" || { echo "缺 src_generated"; exit 1; }
+          test -f "${ROOT}/build/bin/libopen62541.so" || { echo "缺 libopen62541.so"; exit 1; }
+          echo "open62541 就绪"
+
+      - name: 恢复 ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-clang17-flaky-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang17-flaky-
+
+      - name: 构建 Debug
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake \
+                -DOPEN62541_ROOT=${{ github.workspace }}/third_party/open62541-v1.4.14 \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build -j
+
+      - name: 重复 + 乱序（抖 flaky）
+        run: |
+          cd build
+          ./tests-build/tests \
+              --gtest_repeat=50 --gtest_shuffle --gtest_break_on_failure=0 \
+              --gtest_fail_if_no_test_selected
