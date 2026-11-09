@@ -32,6 +32,7 @@ public:
         CHANNEL_NOT_OPEN,
         CHANNEL_NOT_CLOSED,
         DISCONNECT_TIMEOUT,
+        TIMEOUT,
 
         // ---- 并发 / 资源 ----
         THREAD_BUSY,
@@ -82,6 +83,7 @@ public:
             case ErrorCode::CHANNEL_NOT_OPEN:       return "CHANNEL_NOT_OPEN";
             case ErrorCode::CHANNEL_NOT_CLOSED:     return "CHANNEL_NOT_CLOSED";
             case ErrorCode::DISCONNECT_TIMEOUT:     return "DISCONNECT_TIMEOUT";
+            case ErrorCode::TIMEOUT:                return "TIMEOUT";
             case ErrorCode::THREAD_BUSY:            return "THREAD_BUSY";
             case ErrorCode::IN_FLIGHT_TIMEOUT:      return "IN_FLIGHT_TIMEOUT";
             case ErrorCode::BUDGET_EXCEEDED:        return "BUDGET_EXCEEDED";

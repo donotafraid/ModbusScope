@@ -5,36 +5,52 @@
 namespace modbusscope {
 
 enum class FunctionCode : std::uint8_t {
-  ReadHoldingRegisters = 0x03,
-  ReadInputRegisters = 0x04,
-  WriteSingleRegister = 0x06,
-  WriteMultipleRegisters = 0x10,
+    ReadHoldingRegisters = 0x03,
+    ReadInputRegisters = 0x04,
+    WriteSingleRegister = 0x06,
+    WriteMultipleRegisters = 0x10,
 };
 
+// MODBUS Application Protocol V1.1b3 limits:
+//   0x03/0x04: 1..125 registers per request
+//   0x10:      1..123 registers per request
+inline constexpr std::uint16_t kMaxReadRegisters = 125;
+inline constexpr std::uint16_t kMaxWriteRegisters = 123;
+
+constexpr bool is_read_function(FunctionCode function) noexcept {
+    return function == FunctionCode::ReadHoldingRegisters ||
+           function == FunctionCode::ReadInputRegisters;
+}
+
+constexpr bool is_write_function(FunctionCode function) noexcept {
+    return function == FunctionCode::WriteSingleRegister ||
+           function == FunctionCode::WriteMultipleRegisters;
+}
+
 struct ReadRequest {
-    FunctionCode function;
-    std::uint8_t unitId;
-    std::uint16_t startAddress;
-    std::uint16_t quantity;    // 本次读/写多少个寄存器,1..125；否则 InvalidArgument
+    FunctionCode function{FunctionCode::ReadHoldingRegisters};
+    std::uint8_t unitId{1};
+    std::uint16_t startAddress{0};
+    std::uint16_t quantity{1}; // 1..125; otherwise InvalidArgument
 };
 
 struct ReadResponse {
-    FunctionCode function;
-    std::vector<std::uint16_t> registers;   // 移动为 noexcept
+    FunctionCode function{FunctionCode::ReadHoldingRegisters};
+    std::vector<std::uint16_t> registers; // move is noexcept
 };
 
 struct WriteRequest {
-    FunctionCode function;                  // 仅 0x06 或 0x10；其他 -> UnsupportedFunction
-    std::uint8_t unitId;
-    std::uint16_t startAddress;
-    std::uint16_t quantity;                 // 0x06: 必须 == 1；0x10: 1..123
-    std::vector<std::uint16_t> values;      // 前置条件：values.size() == quantity
+    FunctionCode function{FunctionCode::WriteMultipleRegisters};
+    std::uint8_t unitId{1};
+    std::uint16_t startAddress{0};
+    std::uint16_t quantity{1}; // 0x06: == 1; 0x10: 1..123
+    std::vector<std::uint16_t> values; // precondition: values.size() == quantity
 };
 
 struct WriteResponse {
-    FunctionCode function;      // 回显 0x06 或 0x10
-    std::uint16_t startAddress; // 回显
-    std::uint16_t quantity;     // 0x06 恒为 1；0x10 回显请求数量
+    FunctionCode function{FunctionCode::WriteMultipleRegisters};
+    std::uint16_t startAddress{0};
+    std::uint16_t quantity{1};
 };
 
 } // namespace modbusscope
