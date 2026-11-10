@@ -55,6 +55,27 @@ the queued lambda, and waits at most `requestTimeoutMs + 2 s`. If the wait times
 out, the caller returns `TIMEOUT` and never reads the call's output. The lambda
 may still run later; it writes only into the heap object it owns.
 
+## Scope worker
+
+`ScopeModel` adds one more thread, but it never owns a Qt object:
+
+```
+ScopeModel::Impl
+ ├─ std::thread m_worker      polls ScopeSource::read()
+ ├─ ScopeSource m_source      production: ClientScopeSource -> Client
+ ├─ std::mutex m_mutex        guards ring buffers, run state, error
+ └─ std::condition_variable   pause/stop wakeups
+```
+
+The UI thread calls `ScopeModel::snapshot()`, which copies the guarded state. The
+worker calls `Client::read()`, which is already serialized and thread-safe by the
+core client. `ScopeWidget::Impl` runs a `QTimer` on the GUI thread and paints the
+copied snapshot; the worker never calls `QWidget`, `QPainter` or `QTimer`.
+
+`ScopeModel::stop()` sets the stop flag, notifies the condition variable, joins
+the worker, then calls `ScopeSource::stop()`. Joining before stopping the source
+avoids a worker using a half-destroyed `Client`.
+
 ## Official references
 
 - Threads and QObjects:
@@ -67,6 +88,10 @@ may still run later; it writes only into the heap object it owns.
   <https://doc.qt.io/archives/qt-5.15/qcoreapplication.html>
 - QModbusClient:
   <https://doc.qt.io/archives/qt-5.15/qmodbusclient.html>
+- QTimer (GUI-thread refresh):
+  <https://doc.qt.io/archives/qt-5.15/qtimer.html>
+- QWidget::paintEvent:
+  <https://doc.qt.io/archives/qt-5.15/qwidget.html#paintEvent>
 - qtserialbus source:
   `src/serialbus/qmodbusclient.cpp`, `src/serialbus/qmodbustcpclient_p.h`
   <https://code.qt.io/cgit/qt/qtserialbus.git/plain/src/serialbus/qmodbusclient.cpp?h=5.15>

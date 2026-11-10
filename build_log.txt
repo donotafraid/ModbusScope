@@ -1,0 +1,79 @@
+[  1%] Automatic MOC and UIC for target modbusScope
+[  1%] Built target modbusScope_autogen
+[  3%] Building CXX object modbusscope-build/CMakeFiles/modbusScope.dir/modbusScope_autogen/mocs_compilation.cpp.o
+[  5%] Building CXX object modbusscope-build/CMakeFiles/modbusScope.dir/client.cpp.o
+[  7%] Building CXX object modbusscope-build/CMakeFiles/modbusScope.dir/error.cpp.o
+[  9%] Building CXX object modbusscope-build/CMakeFiles/modbusScope.dir/realSdk.cpp.o
+[ 10%] Building CXX object modbusscope-build/CMakeFiles/modbusScope.dir/scope.cpp.o
+[ 12%] Linking CXX static library libmodbusScope.a
+[ 12%] Built target modbusScope
+[ 14%] Automatic MOC and UIC for target modbusScopeGui
+[ 14%] Built target modbusScopeGui_autogen
+[ 16%] Building CXX object modbusscope-build/CMakeFiles/modbusScopeGui.dir/modbusScopeGui_autogen/mocs_compilation.cpp.o
+[ 18%] Building CXX object modbusscope-build/CMakeFiles/modbusScopeGui.dir/scopeWidget.cpp.o
+[ 20%] Linking CXX static library libmodbusScopeGui.a
+[ 20%] Built target modbusScopeGui
+[ 21%] Automatic MOC and UIC for target modbus_scope_demo
+[ 21%] Built target modbus_scope_demo_autogen
+[ 23%] Building CXX object CMakeFiles/modbus_scope_demo.dir/modbus_scope_demo_autogen/mocs_compilation.cpp.o
+[ 25%] Building CXX object CMakeFiles/modbus_scope_demo.dir/src/modbusscope/scopeDemo.cpp.o
+[ 27%] Linking CXX executable bin/modbus_scope_demo
+[ 27%] Built target modbus_scope_demo
+[ 29%] Automatic MOC and UIC for target modbus_client_smoke
+[ 29%] Built target modbus_client_smoke_autogen
+[ 30%] Building CXX object tests-build/CMakeFiles/modbus_client_smoke.dir/modbus_client_smoke_autogen/mocs_compilation.cpp.o
+[ 32%] Building CXX object tests-build/CMakeFiles/modbus_client_smoke.dir/smoke_client.cpp.o
+[ 34%] Linking CXX executable ../bin/modbus_client_smoke
+[ 34%] Built target modbus_client_smoke
+[ 36%] Automatic MOC and UIC for target modbus_client_stress
+[ 36%] Built target modbus_client_stress_autogen
+[ 38%] Building CXX object tests-build/CMakeFiles/modbus_client_stress.dir/modbus_client_stress_autogen/mocs_compilation.cpp.o
+[ 40%] Building CXX object tests-build/CMakeFiles/modbus_client_stress.dir/stress_client.cpp.o
+[ 41%] Linking CXX executable ../bin/modbus_client_stress
+[ 41%] Built target modbus_client_stress
+[ 43%] Automatic MOC and UIC for target modbus_client_recovery
+[ 43%] Built target modbus_client_recovery_autogen
+[ 45%] Building CXX object tests-build/CMakeFiles/modbus_client_recovery.dir/modbus_client_recovery_autogen/mocs_compilation.cpp.o
+[ 47%] Building CXX object tests-build/CMakeFiles/modbus_client_recovery.dir/recovery_client.cpp.o
+[ 49%] Linking CXX executable ../bin/modbus_client_recovery
+[ 49%] Built target modbus_client_recovery
+[ 50%] Automatic MOC and UIC for target modbus_client_p1_regression
+[ 50%] Built target modbus_client_p1_regression_autogen
+[ 52%] Building CXX object tests-build/CMakeFiles/modbus_client_p1_regression.dir/modbus_client_p1_regression_autogen/mocs_compilation.cpp.o
+[ 54%] Building CXX object tests-build/CMakeFiles/modbus_client_p1_regression.dir/p1_regression.cpp.o
+[ 56%] Linking CXX executable ../bin/modbus_client_p1_regression
+[ 56%] Built target modbus_client_p1_regression
+[ 58%] Automatic MOC and UIC for target modbus_client_p2_regression
+[ 58%] Built target modbus_client_p2_regression_autogen
+[ 60%] Building CXX object tests-build/CMakeFiles/modbus_client_p2_regression.dir/modbus_client_p2_regression_autogen/mocs_compilation.cpp.o
+[ 61%] Building CXX object tests-build/CMakeFiles/modbus_client_p2_regression.dir/p2_regression.cpp.o
+[ 63%] Linking CXX executable ../bin/modbus_client_p2_regression
+[ 63%] Built target modbus_client_p2_regression
+[ 65%] Automatic MOC and UIC for target modbus_codec_test
+[ 65%] Built target modbus_codec_test_autogen
+[ 67%] Building CXX object tests-build/CMakeFiles/modbus_codec_test.dir/modbus_codec_test_autogen/mocs_compilation.cpp.o
+[ 69%] Building CXX object tests-build/CMakeFiles/modbus_codec_test.dir/codec_test.cpp.o
+[ 70%] Linking CXX executable ../bin/modbus_codec_test
+[ 70%] Built target modbus_codec_test
+[ 72%] Automatic MOC and UIC for target modbus_encapsulation_probe
+[ 72%] Built target modbus_encapsulation_probe_autogen
+[ 74%] Building CXX object tests-build/CMakeFiles/modbus_encapsulation_probe.dir/modbus_encapsulation_probe_autogen/mocs_compilation.cpp.o
+[ 76%] Building CXX object tests-build/CMakeFiles/modbus_encapsulation_probe.dir/compile/encapsulation_probe.cpp.o
+[ 78%] Linking CXX executable ../bin/modbus_encapsulation_probe
+[ 78%] Built target modbus_encapsulation_probe
+[ 80%] Automatic MOC and UIC for target modbus_unit_tests
+[ 80%] Built target modbus_unit_tests_autogen
+[ 81%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/modbus_unit_tests_autogen/mocs_compilation.cpp.o
+[ 83%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/unit/api_validation_test.cpp.o
+[ 85%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/unit/client_state_test.cpp.o
+[ 87%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/unit/codec_test.cpp.o
+[ 89%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/unit/scope_model_test.cpp.o
+[ 90%] Building CXX object tests-build/CMakeFiles/modbus_unit_tests.dir/unit/scope_presentation_test.cpp.o
+[ 92%] Linking CXX executable ../bin/modbus_unit_tests
+[ 92%] Built target modbus_unit_tests
+[ 94%] Automatic MOC and UIC for target modbus_scope_widget_test
+[ 94%] Built target modbus_scope_widget_test_autogen
+[ 96%] Building CXX object tests-build/CMakeFiles/modbus_scope_widget_test.dir/modbus_scope_widget_test_autogen/mocs_compilation.cpp.o
+[ 98%] Building CXX object tests-build/CMakeFiles/modbus_scope_widget_test.dir/unit/scope_widget_test.cpp.o
+[100%] Linking CXX executable ../bin/modbus_scope_widget_test
+[100%] Built target modbus_scope_widget_test

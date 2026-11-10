@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(ENABLE_ASAN "Enable AddressSanitizer + UBSan" OFF)
 option(ENABLE_LSAN "Enable AddressSanitizer + LSan (leak only)" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(MODBUSSCOPE_BUILD_GUI "Build the Qt Widgets Scope demo" ON)
 
 set(_san_count 0)
 foreach(_opt ENABLE_ASAN ENABLE_LSAN ENABLE_TSAN)
@@ -49,6 +50,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt5 5.15.3 EXACT COMPONENTS Core Network SerialBus REQUIRED)
 
+if(MODBUSSCOPE_BUILD_GUI)
+    find_package(Qt5 5.15.3 EXACT COMPONENTS Widgets QUIET)
+    if(NOT Qt5Widgets_FOUND)
+        message(WARNING
+            "Qt5Widgets was not found; the Scope demo is disabled. "
+            "Install qtbase5-dev or configure with -DMODBUSSCOPE_BUILD_GUI=OFF.")
+        set(MODBUSSCOPE_BUILD_GUI OFF)
+    endif()
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
@@ -60,74 +71,32 @@ add_subdirectory(
     modbusscope-build
 )
 
-# Integration clients. These need QtCore only for the application object and
-# the report formatting; the wrapper library itself is linked through its alias.
-function(add_modbus_client name source)
-    add_executable(${name} ${source})
-    target_compile_features(${name} PRIVATE cxx_std_17)
-    target_link_libraries(${name} PRIVATE
-        modbusScope::modbusScope
-        Qt5::Core
-        stdc++
+if(MODBUSSCOPE_BUILD_GUI)
+    add_executable(modbus_scope_demo
+                   ${InternalrootDir}/src/modbusscope/scopeDemo.cpp)
+    target_compile_features(modbus_scope_demo PRIVATE cxx_std_17)
+    target_link_libraries(modbus_scope_demo PRIVATE
+        modbusScope::modbusScopeGui
+        Qt5::Widgets
     )
-    set_target_properties(${name} PROPERTIES
+    set_target_properties(modbus_scope_demo PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-endfunction()
+endif()
 
-add_modbus_client(modbus_client_smoke
-                  ${InternalrootDir}/tests/smoke_client.cpp)
-add_modbus_client(modbus_client_stress
-                  ${InternalrootDir}/tests/stress_client.cpp)
-add_modbus_client(modbus_client_recovery
-                  ${InternalrootDir}/tests/recovery_client.cpp)
-
-# P1 fault-injection probes. The integration modes need a server; the
-# no-QCoreApplication mode is standalone and is wired into CTest.
-add_modbus_client(modbus_client_p1_regression
-                  ${InternalrootDir}/tests/p1_regression.cpp)
-
-# P2 probes: API/error mapping, write echo, Qt-free codec, and a compile-time
-# encapsulation/Rule-of-Five probe. The last two deliberately do not link Qt.
-add_modbus_client(modbus_client_p2_regression
-                  ${InternalrootDir}/tests/p2_regression.cpp)
-
-add_executable(modbus_codec_test ${InternalrootDir}/tests/codec_test.cpp)
-target_compile_features(modbus_codec_test PRIVATE cxx_std_17)
-target_link_libraries(modbus_codec_test PRIVATE modbusScope::modbusScope)
-set_target_properties(modbus_codec_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+add_subdirectory(
+    ${InternalrootDir}/tests/
+    tests-build
 )
-
-add_executable(modbus_encapsulation_probe
-               ${InternalrootDir}/tests/compile/encapsulation_probe.cpp)
-target_compile_features(modbus_encapsulation_probe PRIVATE cxx_std_17)
-target_link_libraries(modbus_encapsulation_probe PRIVATE
-    modbusScope::modbusScope)
-set_target_properties(modbus_encapsulation_probe PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_test(NAME p1_no_qcoreapp
-         COMMAND modbus_client_p1_regression no_qcoreapp)
-set_tests_properties(p1_no_qcoreapp PROPERTIES TIMEOUT 10)
-
-add_test(NAME p2_error_mapping
-         COMMAND modbus_client_p2_regression error_mapping)
-set_tests_properties(p2_error_mapping PROPERTIES TIMEOUT 10)
-
-add_test(NAME p2_codec COMMAND modbus_codec_test)
-add_test(NAME p2_encapsulation COMMAND modbus_encapsulation_probe)
-
-add_test(NAME p2_write_echo
-         COMMAND bash ${InternalrootDir}/tests/run_p2_regression.sh
-                 ${CMAKE_BINARY_DIR})
-set_tests_properties(p2_write_echo PROPERTIES TIMEOUT 30)
 
 # Install/export support: consumers use
 #   find_package(modbusScope 0.1 CONFIG REQUIRED)
 #   target_link_libraries(app PRIVATE modbusScope::modbusScope)
-install(TARGETS modbusScope
+set(_install_targets modbusScope)
+if(MODBUSSCOPE_BUILD_GUI)
+    list(APPEND _install_targets modbusScopeGui)
+endif()
+install(TARGETS ${_install_targets}
     EXPORT modbusScopeTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

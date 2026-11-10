@@ -5,5 +5,6 @@
 #include "modbusscope/config.h"
 #include "modbusscope/registerCodec.h"
 #include "modbusscope/request.h"
+#include "modbusscope/scope.h"
 #include "modbusscope/state.h"
 #include "modbusscope/version.h"

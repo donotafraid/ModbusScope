@@ -1,0 +1,127 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 5.15.3 and Clang 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git python3-pip \
+            clang-17 \
+            qtbase5-dev libqt5serialbus5-dev
+
+      - name: Install GTest through Conan
+        run: |
+          python3 -m pip install --user conan
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          conan profile detect --force
+          conan install . -pr:a=build.profile \
+                --output-folder=conan_debug_build --build=missing
+
+      - name: Configure
+        run: |
+          unset CXXFLAGS LDFLAGS
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_C_COMPILER=clang-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: CTest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Integration smoke and stress
+        run: |
+          python3 tests/modbus_server.py --port 15020 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          sleep 0.5
+          ./build/bin/modbus_client_smoke 127.0.0.1 15020
+          ./build/bin/modbus_client_stress 127.0.0.1 15020 8
+
+  asan:
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 5.15.3 and Clang 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git python3-pip \
+            clang-17 qtbase5-dev libqt5serialbus5-dev
+      - name: Install GTest through Conan
+        run: |
+          python3 -m pip install --user conan
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          conan profile detect --force
+          conan install . -pr:a=build.profile \
+                --output-folder=conan_debug_build --build=missing
+      - name: Configure ASan+UBSan
+        run: |
+          unset CXXFLAGS LDFLAGS
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON \
+                -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_C_COMPILER=clang-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake
+      - name: Build
+        run: cmake --build build-asan -j
+      - name: ASan+UBSan CTest
+        run: ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build-asan --output-on-failure
+      - name: LSan CTest (ScopeWidget excluded)
+        run: ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan -E ScopeWidget --output-on-failure
+
+  tsan:
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-17
+      CXX: clang++-17
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 5.15.3 and Clang 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git python3-pip \
+            clang-17 qtbase5-dev libqt5serialbus5-dev
+      - name: Install GTest through Conan
+        run: |
+          python3 -m pip install --user conan
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          conan profile detect --force
+          conan install . -pr:a=build.profile \
+                --output-folder=conan_debug_build --build=missing
+      - name: Configure TSan
+        run: |
+          unset CXXFLAGS LDFLAGS
+          cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON \
+                -DCMAKE_CXX_COMPILER=clang++-17 \
+                -DCMAKE_C_COMPILER=clang-17 \
+                -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake
+      - name: Build
+        run: cmake --build build-tsan -j
+      - name: TSan CTest
+        run: |
+          setarch "$(uname -m)" -R \
+            env TSAN_OPTIONS=halt_on_error=1:exitcode=66 \
+            ctest --test-dir build-tsan --output-on-failure

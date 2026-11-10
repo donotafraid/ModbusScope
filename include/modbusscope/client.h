@@ -1,12 +1,21 @@
 #pragma once
 #include <memory>
+#include <utility>
 
 #include "Rust_error_deal/error_deal.h"
 #include "modbusscope/config.h"
 #include "modbusscope/request.h"
 #include "modbusscope/state.h"
 
+#ifdef MODBUSSCOPE_ENABLE_TEST_HOOKS
+#include "modbusscope/detail/Isdk.h"
+#endif
+
 namespace modbusscope {
+
+namespace detail {
+class ISdk;
+}
 
 // Thread-safe Modbus TCP client.
 //
@@ -24,6 +33,21 @@ public:
     // std::bad_alloc. On success the client is connected and READY.
     static Result<std::unique_ptr<Client>, RichError>
     create(ClientConfig config) noexcept;
+
+#ifdef MODBUSSCOPE_ENABLE_TEST_HOOKS
+    // Test-only creation seam: identical lifecycle to create(), but the
+    // transport implementation is injected. Tests include
+    // modbusscope/detail/Isdk.h before using this overload.
+    static Result<std::unique_ptr<Client>, RichError>
+    createWithSdk(std::unique_ptr<detail::ISdk> sdk,
+                  ClientConfig config) noexcept {
+        return create_impl(std::move(config), std::move(sdk));
+    }
+
+    // Runs one watchdog iteration on the calling thread. Production builds do
+    // not expose this symbol.
+    void pumpWatchdogForTest() noexcept { pump_watchdog(); }
+#endif
 
     ~Client() noexcept;
 
@@ -61,7 +85,12 @@ public:
 
 private:
     class Impl;
-    explicit Client(ClientConfig config);
+    Client(ClientConfig config, std::unique_ptr<detail::ISdk> sdk);
+    static Result<std::unique_ptr<Client>, RichError>
+    create_impl(ClientConfig config,
+                std::unique_ptr<detail::ISdk> sdk) noexcept;
+    void pump_watchdog() noexcept;
+
     std::unique_ptr<Impl> m_impl;
 };
 

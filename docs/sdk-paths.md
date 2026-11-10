@@ -198,3 +198,55 @@ Official references:
 - "For non-GUI application that uses Qt, there should be exactly one
   QCoreApplication object."
   <https://doc.qt.io/archives/qt-5.15/qcoreapplication.html>
+
+## 6. Scope polling and UI projection
+
+```
+ScopeModel::start
+  -> ScopeModel::Impl::start
+     -> std::thread(worker_loop)
+        -> condition_variable.wait_for(pollIntervalMs)
+        -> ScopeSource::read(channels)
+           -> ClientScopeSource::read
+              -> Client::create (first poll only)
+                 -> RealSdk::start
+                    -> QThread::start -> QEventLoop
+              -> for each channel:
+                   Client::read
+                     -> RealSdk::read
+                        -> QMetaObject::invokeMethod(transport, ...)
+                        -> QEventLoop in Transport::readSync
+                        -> QModbusReply::finished / TimeoutError
+              -> value = registers[0] * scale + offset
+        -> ScopeModel::Impl::publish_success
+           -> lock m_mutex
+           -> append ring buffer, update min/max/latest, ++sequence
+
+UI thread
+  -> ScopeWidget::Impl::pull       (QTimer, default 100 ms)
+     -> ScopeModel::snapshot()
+        -> lock m_mutex, copy channels + samples + run/transport/error
+     -> present(snapshot)
+        -> ScopePresentation { label, color, hint, canStart, ... }
+     -> QWidget::update()
+        -> paintEvent
+```
+
+`ScopeModel::pause()` stores `m_paused`, notifies the condition variable, and
+increments `sequence`. The worker may finish one in-flight poll; `publish_success`
+keeps the run state `Paused` in that case. `ScopeModel::clear()` drops samples and
+statistics but keeps the run state. `ScopeModel::stop()` joins the worker before
+calling `ScopeSource::stop()`.
+
+The presentation table is the only place where `LifeState` becomes UI text and
+button affordances. See [scope.md](scope.md) for the full table.
+
+Official references:
+
+- `QTimer` on the GUI thread:
+  <https://doc.qt.io/archives/qt-5.15/qtimer.html>
+- `QWidget::paintEvent` and `QPainter`:
+  <https://doc.qt.io/archives/qt-5.15/qwidget.html#paintEvent>
+  <https://doc.qt.io/archives/qt-5.15/qpainter.html>
+- `QModbusReply::finished` / `deleteLater()`:
+  <https://doc.qt.io/archives/qt-5.15/qmodbusreply.html>

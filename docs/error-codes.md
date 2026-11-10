@@ -42,6 +42,15 @@ A refused TCP connect is not a timeout. It returns `CONNECTION_FAILED`; a connec
 that exceeds `connectTimeoutMs` returns `TIMEOUT`. The regression test
 `p2_error_mapping` pins this distinction.
 
+## Scope projection
+
+`ScopeModel` does not invent a third error vocabulary. A failed
+`ScopeSource::read()` stores the `RichError::context()` string in
+`ScopeSnapshot::lastError` and moves `ScopeRunState` to `Faulted`. The transport
+part of the snapshot is the Client's `LifeState`, so the UI can distinguish
+"poll failed" from "transport is recovering". The mapping to labels and button
+affordances lives in `present()`; see [scope.md](scope.md).
+
 ## Official references
 
 - `QModbusDevice::Error`:

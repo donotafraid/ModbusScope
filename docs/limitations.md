@@ -36,23 +36,23 @@ finished features.
 
 ## Repository evidence
 
-- CTest covers the standalone probes and the write-echo fault injection. The
-  smoke/stress/recovery/P1 integration clients still need a manually started
-  `tests/modbus_server.py`.
-- `.github/workflows/sanitizers.yml` and `scripts/build_open62541.sh` belong to a
-  previous OPC UA project. They are not a working CI for this library.
-- `bench/`, `config_folder/`, `conanfile.txt`, `include/concurrentqueue.h`,
-  `src/main.cpp` and the empty `src/modbusscope/main.cpp` are leftovers.
-- No `install()` consumer test is run in CI, although the CMake export is now
-  present and was checked manually.
-- There is no MockSdk or virtual clock test, so state-machine transitions are
-  covered by real sockets.
+- CTest registers 45 cases. The gtest suite uses `MockSdk` for the Client state
+  machine and `FakeScopeSource` for the Scope model; the smoke/stress/recovery/P1
+  integration clients still need a manually started `tests/modbus_server.py`.
+- `ScopeWidget` is excluded from the LSan gate because the Qt `offscreen`
+  platform plugin keeps process-lifetime allocations. ASan/UBSan and TSan still
+  run the widget render test.
+- Each Scope channel is one register read per poll. Block-read grouping is not
+  implemented.
+- The installed-package consumer probe is still manual; the export exists and
+  was checked outside CTest.
+- `.github/workflows/ci.yml` is checked in but was not executed in the review
+  session. Only local build/CTest/sanitizer evidence is available.
 
 ## Recommended next steps
 
-1. Replace the leftover GitHub workflow with a Qt 5.15.3 + clang-17 job that
-   runs build, CTest, ASan/LSan and TSan.
-2. Add a `MockSdk` + virtual clock unit test for every `LifeState` transition and
-   for shutdown with an in-flight call.
-3. Remove or archive the OPC UA/benchmark/MQTT residue.
-4. Add an installed-package consumer probe to CTest.
+1. Add a virtual clock to the Client watchdog so recovery-window tests do not
+   sleep.
+2. Add block-read grouping to the Scope source for contiguous channels.
+3. Add the installed-package consumer probe to CTest.
+4. Replace the manual integration-server steps with a pytest/CTest fixture.

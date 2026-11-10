@@ -139,9 +139,11 @@ std::int64_t now_ms() noexcept {
 
 class Client::Impl {
 public:
-    explicit Impl(ClientConfig config)
+    Impl(ClientConfig config, std::unique_ptr<detail::ISdk> sdk)
         : m_config(std::move(config)),
-          m_sdk(std::make_unique<detail::RealSdk>(m_config.requestTimeoutMs)) {}
+          m_sdk(sdk ? std::move(sdk)
+                    : std::make_unique<detail::RealSdk>(
+                          m_config.requestTimeoutMs)) {}
 
     ~Impl() { shutdown(); }
 
@@ -328,6 +330,10 @@ public:
     LifeState life() const noexcept {
         return m_life.load(std::memory_order_acquire);
     }
+
+    // Test-only: one watchdog iteration on the caller's thread. The production
+    // watchdog calls the same tick from m_watchdog.
+    void pump_watchdog() noexcept { watchdog_tick(); }
 
     Result<Unit, RichError> shutdown() noexcept {
         std::call_once(m_shutdownOnce, [this] { shutdown_impl(); });
@@ -542,8 +548,8 @@ private:
     std::atomic<bool> m_watchdogStop{false};
 };
 
-Client::Client(ClientConfig config)
-    : m_impl(std::make_unique<Impl>(std::move(config))) {}
+Client::Client(ClientConfig config, std::unique_ptr<detail::ISdk> sdk)
+    : m_impl(std::make_unique<Impl>(std::move(config), std::move(sdk))) {}
 
 Client::~Client() noexcept {
     if (m_impl) {
@@ -551,8 +557,20 @@ Client::~Client() noexcept {
     }
 }
 
+void Client::pump_watchdog() noexcept {
+    if (m_impl) {
+        m_impl->pump_watchdog();
+    }
+}
+
 Result<std::unique_ptr<Client>, RichError>
 Client::create(ClientConfig config) noexcept {
+    return create_impl(std::move(config), nullptr);
+}
+
+Result<std::unique_ptr<Client>, RichError>
+Client::create_impl(ClientConfig config,
+                    std::unique_ptr<detail::ISdk> sdk) noexcept {
     try {
         std::string reason;
         if (!validate_config(config, &reason)) {
@@ -560,7 +578,8 @@ Client::create(ClientConfig config) noexcept {
                 RichError{RichError::ErrorCode::INVALID_CONFIG, std::move(reason)});
         }
 
-        auto client = std::unique_ptr<Client>(new Client(std::move(config)));
+        auto client = std::unique_ptr<Client>(
+            new Client(std::move(config), std::move(sdk)));
         if (!client->m_impl->start_transport(&reason)) {
             return Result<std::unique_ptr<Client>, RichError>::error(
                 RichError{RichError::ErrorCode::SDK_ERROR,

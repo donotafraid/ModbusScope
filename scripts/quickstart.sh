@@ -59,8 +59,21 @@ if [ "$missing" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Configure, build, test.
+# 2. GTest through Conan, then configure, build, test.
 # ---------------------------------------------------------------------------
+if [ -f "${ROOT}/conan_debug_build/conan_toolchain.cmake" ]; then
+  log "Reusing conan_debug_build/conan_toolchain.cmake"
+  CONAN_TOOLCHAIN="${ROOT}/conan_debug_build/conan_toolchain.cmake"
+elif command -v conan >/dev/null 2>&1; then
+  log "Installing Conan dependencies (GTest)"
+  conan install "${ROOT}" -pr:a="${ROOT}/build.profile" \
+        --output-folder="${ROOT}/conan_debug_build" --build=missing
+  CONAN_TOOLCHAIN="${ROOT}/conan_debug_build/conan_toolchain.cmake"
+else
+  echo "warning: conan not found; the gtest unit suite will be skipped." >&2
+  CONAN_TOOLCHAIN=""
+fi
+
 log "Configuring $BUILD_DIR"
 # Clang can select a newer GCC installation than the one that owns the
 # libstdc++ headers. Point it at the GCC that actually provides libstdc++ so
@@ -73,6 +86,9 @@ CMAKE_ARGS=(
 )
 if [[ -n "$GCC_INSTALL_DIR" && "$GCC_INSTALL_DIR" != "." ]]; then
   CMAKE_ARGS+=("-DCMAKE_CXX_FLAGS=--gcc-install-dir=${GCC_INSTALL_DIR}")
+fi
+if [[ -n "$CONAN_TOOLCHAIN" ]]; then
+  CMAKE_ARGS+=("-DCMAKE_TOOLCHAIN_FILE=${CONAN_TOOLCHAIN}")
 fi
 cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}"
 
