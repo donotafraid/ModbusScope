@@ -19,6 +19,7 @@ REQUESTS = 0
 DROP_AFTER = 0
 SLOW_MS = 0
 BLACKHOLE = False
+BAD_WRITE_ECHO = False
 
 
 def exception_pdu(function, code):
@@ -50,6 +51,8 @@ def handle_pdu(unit, pdu):
             return exception_pdu(function, 0x02)
         with LOCK:
             HOLDING[address] = value
+        if BAD_WRITE_ECHO:
+            return struct.pack(">BHH", function, (address + 1) & 0xFFFF, value)
         return pdu
 
     if function == 0x10:
@@ -63,6 +66,8 @@ def handle_pdu(unit, pdu):
         values = struct.unpack(">" + "H" * count, pdu[6:6 + byte_count])
         with LOCK:
             HOLDING[address:address + count] = values
+        if BAD_WRITE_ECHO:
+            return struct.pack(">BHH", function, address, count + 1)
         return struct.pack(">BHH", function, address, count)
 
     return exception_pdu(function, 0x01)
@@ -120,11 +125,14 @@ def main():
                         help="delay each response by this many milliseconds")
     parser.add_argument("--blackhole", action="store_true",
                         help="accept 0x03/0x04 but never reply")
+    parser.add_argument("--bad-write-echo", action="store_true",
+                        help="echo a wrong address/count for 0x06/0x10")
     args = parser.parse_args()
-    global DROP_AFTER, SLOW_MS, BLACKHOLE
+    global DROP_AFTER, SLOW_MS, BLACKHOLE, BAD_WRITE_ECHO
     DROP_AFTER = args.drop_after
     SLOW_MS = args.slow_ms
     BLACKHOLE = args.blackhole
+    BAD_WRITE_ECHO = args.bad_write_echo
     with Server((args.host, args.port), Handler) as server:
         print(f"listening on {args.host}:{args.port}", flush=True)
         server.serve_forever()

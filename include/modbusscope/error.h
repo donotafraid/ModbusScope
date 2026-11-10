@@ -3,17 +3,22 @@
 
 namespace modbusscope {
 
-// 固定错误码。Ok 仅用于 Error 默认构造，不用于成功 Result。
+// Internal transport error code.
+//
+// This is the vocabulary of detail::ISdk, not the public API. Callers receive
+// RichError through Client; modbusscope.h does not include this header. Keep the
+// two layers separate so the public surface cannot grow a second error model.
+//
+// Ok is only used as the default Error value; a successful Result never carries
+// ErrorCode::Ok.
 enum class ErrorCode : int {
     Ok = 0,
     InvalidArgument,       // 参数越界/非法功能码/空 host
     NotConnected,          // 状态非 Ready 时发起 read
     Timeout,               // 连接或请求超时
     ProtocolError,         // Modbus 异常响应 / 帧格式错误
-    ConnectionFailed,      // TCP 建立失败
-    UnsupportedFunction,   // 非 0x03/0x04
+    ConnectionFailed,      // TCP 建立失败/拒绝/reset
     Closed,                // 终态 Closed 上调用
-    Busy,                  // 配置写入并发冲突（调用方未串行化）
     Internal,              // 内存分配失败等内部错误
 };
 

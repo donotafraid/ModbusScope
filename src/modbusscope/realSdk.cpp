@@ -31,11 +31,6 @@
 namespace modbusscope::detail {
 namespace {
 
-// Extra slack the caller waits beyond the SDK's own timeout before giving up.
-// The transport always has its own bounded QEventLoop, so this is only a guard
-// against a wedged thread, not the primary timeout.
-constexpr std::uint32_t kCallWaitGraceMs = 2000;
-
 // Snapshot used by state(); it has no protocol timeout of its own.
 constexpr std::uint32_t kStateWaitMs = 2000;
 
@@ -268,6 +263,9 @@ public:
         if (!m_client || !response) {
             return ErrorCode::Internal;
         }
+        if (request.quantity == 0) {
+            return ErrorCode::InvalidArgument;
+        }
         if (m_client->state() != QModbusDevice::ConnectedState) {
             return ErrorCode::NotConnected;
         }
@@ -339,6 +337,10 @@ public:
         if (!m_client || !response) {
             return ErrorCode::Internal;
         }
+        if (request.values.size() != request.quantity ||
+            request.values.empty()) {
+            return ErrorCode::InvalidArgument;
+        }
         if (m_client->state() != QModbusDevice::ConnectedState) {
             return ErrorCode::NotConnected;
         }
@@ -396,11 +398,48 @@ public:
             return map_device_error(error);
         }
 
-        if (raw.isValid() &&
-            raw.functionCode() != static_cast<QModbusPdu::FunctionCode>(
+        if (!raw.isValid()) {
+            if (detail) {
+                *detail = "write response is not a valid Modbus PDU";
+            }
+            return ErrorCode::ProtocolError;
+        }
+        if (raw.functionCode() != static_cast<QModbusPdu::FunctionCode>(
                                       request.function)) {
             if (detail) {
                 *detail = "write response function mismatch";
+            }
+            return ErrorCode::ProtocolError;
+        }
+
+        // 0x06 echoes (address, value); 0x10 echoes (address, quantity).
+        // Comparing only the function code accepts a server that echoes the
+        // wrong address or count, which is exactly the failure this check is
+        // meant to catch.
+        if (raw.dataSize() != 4) {
+            if (detail) {
+                *detail = "write response echo has the wrong length";
+            }
+            return ErrorCode::ProtocolError;
+        }
+        quint16 echoAddress = 0;
+        quint16 echoSecond = 0;
+        raw.decodeData(&echoAddress, &echoSecond);
+        if (echoAddress != request.startAddress) {
+            if (detail) {
+                *detail = "write response address mismatch";
+            }
+            return ErrorCode::ProtocolError;
+        }
+        const quint16 expectedSecond =
+            request.function == FunctionCode::WriteSingleRegister
+                ? static_cast<quint16>(request.values.front())
+                : static_cast<quint16>(request.quantity);
+        if (echoSecond != expectedSecond) {
+            if (detail) {
+                *detail = request.function == FunctionCode::WriteSingleRegister
+                              ? "write response value mismatch"
+                              : "write response quantity mismatch";
             }
             return ErrorCode::ProtocolError;
         }
@@ -627,7 +666,7 @@ ErrorCode RealSdk::connect(const TcpEndpoint &endpoint, std::uint32_t timeoutMs,
         return ErrorCode::Internal;
     }
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kCallWaitGraceMs)) != std::future_status::ready) {
+            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -670,7 +709,7 @@ ErrorCode RealSdk::disconnect(std::uint32_t timeoutMs, std::string *detail) {
         return ErrorCode::Internal;
     }
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kCallWaitGraceMs)) != std::future_status::ready) {
+            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -716,7 +755,7 @@ ErrorCode RealSdk::read(const ReadRequest &request, std::uint32_t timeoutMs,
         return ErrorCode::Internal;
     }
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kCallWaitGraceMs)) != std::future_status::ready) {
+            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -765,7 +804,7 @@ ErrorCode RealSdk::write(const WriteRequest &request, std::uint32_t timeoutMs,
         return ErrorCode::Internal;
     }
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kCallWaitGraceMs)) != std::future_status::ready) {
+            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {

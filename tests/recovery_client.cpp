@@ -14,9 +14,7 @@ bool wait_ready(modbusscope::Client &client, int timeoutMs) {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        auto state = client.state();
-        if (state.is_success() &&
-            *state.get() == modbusscope::LifeState::READY) {
+        if (client.state() == modbusscope::LifeState::READY) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

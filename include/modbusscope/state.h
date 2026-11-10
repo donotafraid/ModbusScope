@@ -2,13 +2,6 @@
 
 namespace modbusscope {
 
-// Connection-attempt state. ConnState only describes the local "single flight"
-// guard around connect()/disconnect(); it is not the public session state.
-enum class ConnState : int {
-    Idle,
-    Connecting
-};
-
 // Public session state.
 //
 //   IDLE        transport is not connected and no recovery is scheduled.
@@ -28,22 +21,5 @@ enum class LifeState : int {
 };
 
 const char* to_string(LifeState state) noexcept;
-
-// State-machine event. Public only for observability; no public API accepts it.
-enum class SessionEvent : int {
-    Connect,
-    ConnectSucceeded,
-    ConnectFailed,
-    RequestIssued,
-    RequestSucceeded,
-    RequestFailed,
-    Disconnect,
-    Shutdown,
-    NullPtr,
-    ThreadBusy,
-    Unknown
-};
-
-const char* to_string(SessionEvent event) noexcept;
 
 } // namespace modbusscope

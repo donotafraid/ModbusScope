@@ -28,6 +28,7 @@ public:
         // ---- 连接 / 会话 ----
         NOT_CONNECTED,
         CONNECT_TIMEOUT,
+        CONNECTION_FAILED,   // TCP refused/reset; distinct from a timeout
         SESSION_NOT_ACTIVATED,
         CHANNEL_NOT_OPEN,
         CHANNEL_NOT_CLOSED,
@@ -79,6 +80,7 @@ public:
             case ErrorCode::CONVERSION_FAILED:      return "CONVERSION_FAILED";
             case ErrorCode::NOT_CONNECTED:          return "NOT_CONNECTED";
             case ErrorCode::CONNECT_TIMEOUT:        return "CONNECT_TIMEOUT";
+            case ErrorCode::CONNECTION_FAILED:      return "CONNECTION_FAILED";
             case ErrorCode::SESSION_NOT_ACTIVATED:  return "SESSION_NOT_ACTIVATED";
             case ErrorCode::CHANNEL_NOT_OPEN:       return "CHANNEL_NOT_OPEN";
             case ErrorCode::CHANNEL_NOT_CLOSED:     return "CHANNEL_NOT_CLOSED";

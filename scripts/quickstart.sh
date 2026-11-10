@@ -35,7 +35,7 @@ as_root() {
 #    Qt headers/libs/qmake; the Modbus module lives in libqt5serialbus5-dev.
 # ---------------------------------------------------------------------------
 missing=0
-for tool in cmake git "$CC" "$CXX" qmake; do
+for tool in cmake git gcc "$CC" "$CXX" qmake; do
   command -v "$tool" >/dev/null 2>&1 || missing=1
 done
 # qmake can exist while the dev headers are absent; check a known header.
@@ -62,10 +62,19 @@ fi
 # 2. Configure, build, test.
 # ---------------------------------------------------------------------------
 log "Configuring $BUILD_DIR"
-cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug \
--DCMAKE_C_COMPILER="$CC" \
--DCMAKE_CXX_COMPILER="$CXX" \
--DCMAKE_EXE_LINKER_FLAGS="-L/usr/lib/gcc/x86_64-linux-gnu/11"
+# Clang can select a newer GCC installation than the one that owns the
+# libstdc++ headers. Point it at the GCC that actually provides libstdc++ so
+# Qt (built with libstdc++) and this library share the same C++ ABI.
+GCC_INSTALL_DIR=${GCC_INSTALL_DIR:-$(dirname "$(gcc -print-file-name=libstdc++.so 2>/dev/null || true)")}
+CMAKE_ARGS=(
+  -DCMAKE_BUILD_TYPE=Debug
+  -DCMAKE_C_COMPILER="$CC"
+  -DCMAKE_CXX_COMPILER="$CXX"
+)
+if [[ -n "$GCC_INSTALL_DIR" && "$GCC_INSTALL_DIR" != "." ]]; then
+  CMAKE_ARGS+=("-DCMAKE_CXX_FLAGS=--gcc-install-dir=${GCC_INSTALL_DIR}")
+fi
+cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}"
 
 log "Building"
 cmake --build "$BUILD_DIR" -j "$JOBS"

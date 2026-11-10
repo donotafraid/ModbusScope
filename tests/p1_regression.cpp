@@ -106,15 +106,12 @@ int run_half_open(const char *host, const char *port) {
     }
 
     const auto state = client->state();
-    if (state.is_fail()) {
-        return fail("state read failed");
-    }
-    if (*state.get() == modbusscope::LifeState::READY) {
+    if (state == modbusscope::LifeState::READY) {
         return fail("two consecutive timeouts left the client READY "
                     "(half-open connection not escalated)");
     }
-    std::cout << "half_open: ok state="
-              << modbusscope::to_string(*state.get()) << '\n';
+    std::cout << "half_open: ok state=" << modbusscope::to_string(state)
+              << '\n';
     return 0;
 }
 

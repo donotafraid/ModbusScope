@@ -1,6 +1,6 @@
 {
     "broker_address": "172.28.80.1",
-    "client_id": "client_MQTT",
+    "client_id": "client",
     "persistence_type": 1,
     "persistence_context": "NONE",
     "topicName": "datasheet",

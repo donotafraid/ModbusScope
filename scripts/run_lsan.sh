@@ -1,39 +1,28 @@
 #!/usr/bin/env bash
-# scripts/run_lsan.sh —— 在 build-lsan/ 下运行 LSan（只查泄漏）
+# LSan-only smoke/stress run for the current wrapper binaries.
+#
+#   BUILD_DIR=build-lsan scripts/run_lsan.sh
 set -euo pipefail
 
-BUILD_DIR="${BUILD_DIR:-build-lsan}"
-TEST_BIN="${BUILD_DIR}/tests-build/tests"
-LOG_DIR="${BUILD_DIR}/lsan_logs"
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+BUILD_DIR=${BUILD_DIR:-build-lsan}
+PORT=${PORT:-15061}
+BIN_DIR="${ROOT}/${BUILD_DIR}/bin"
 
-[[ -x "${TEST_BIN}" ]] || { echo "缺少 ${TEST_BIN}，请先在 ${BUILD_DIR} 下 cmake --build"; exit 2; }
-mkdir -p "${LOG_DIR}"
-
-ARCH_FLAG="${ARCH_FLAG:-}"
-
-FILTER='Client*'
-
-run_one() {
-  local name="$1" filter="$2"
-  echo "=== LSan: ${name} (filter=${filter}) ==="
-
-  local n
-  n=$("${TEST_BIN}" --gtest_list_tests --gtest_filter="${filter}" 2>/dev/null \
-        | grep -cE '^\s+\S' || true)
-  if [[ "${n}" -eq 0 ]]; then
-    echo "ERROR: filter '${filter}' matched 0 tests" >&2
-    return 1
-  fi
-  echo "  -> ${n} tests selected"
-
-  ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:report_objects=1" \
-  LSAN_OPTIONS="halt_on_error=1:report_objects=1:log_path=${LOG_DIR}/lsan_report_${name}" \
-    ${ARCH_FLAG} "${TEST_BIN}" \
-      --gtest_filter="${filter}" \
-      2>&1 | tee "${LOG_DIR}/lsan_${name}.log"
-
-  return "${PIPESTATUS[0]}"
+[[ -x "${BIN_DIR}/modbus_client_smoke" ]] || {
+    echo "missing ${BIN_DIR}/modbus_client_smoke; build ${BUILD_DIR} first" >&2
+    exit 2
 }
 
-run_one Normal  "${FILTER}"
-echo "LSan 全部通过。日志在 ${LOG_DIR}/"
+python3 "${ROOT}/tests/modbus_server.py" --port "${PORT}" \
+    >/tmp/modbus_lsan_server.log 2>&1 &
+server_pid=$!
+trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+sleep 0.3
+
+export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:report_objects=1"
+export LSAN_OPTIONS="halt_on_error=1:report_objects=1"
+
+"${BIN_DIR}/modbus_client_smoke" 127.0.0.1 "${PORT}"
+"${BIN_DIR}/modbus_client_stress" 127.0.0.1 "${PORT}" 8
+echo "LSan exercises passed"

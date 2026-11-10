@@ -1,8 +1,6 @@
 # Build the reusable client library. The empty main.cpp that used to be listed
 # here made the target build successfully while client.cpp was never compiled.
-cmake_minimum_required(VERSION 3.15)
-project(modbusScope CXX)
-
+# The parent project sets InternalrootDir before add_subdirectory().
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/error.cpp
@@ -17,15 +15,17 @@ target_compile_features(${appleName} PUBLIC cxx_std_17)
 target_compile_options(${appleName} PRIVATE -Wswitch-enum -Werror=switch-enum)
 
 target_include_directories(${appleName}
-    PUBLIC ${CMAKE_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_SOURCE_DIR}
+    PUBLIC
+        $<BUILD_INTERFACE:${InternalrootDir}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE ${InternalrootDir}
 )
 
-# QtSerialBus is only needed by the implementation. The public headers do not
-# include Qt, so consumers see no Qt types through modbusscope/modbusscope.h.
+# Qt is an implementation detail: no public header includes it, and the codec
+# header is std-only. A static library still needs its Qt link dependencies on
+# the consumer link line, so they stay PRIVATE (exported as LINK_ONLY).
 target_link_libraries(${appleName}
-    PUBLIC Qt5::Core
-    PRIVATE Qt5::Network Qt5::SerialBus
+    PRIVATE Qt5::Core Qt5::Network Qt5::SerialBus 
 )
 
 set_target_properties(${appleName} PROPERTIES POSITION_INDEPENDENT_CODE ON)

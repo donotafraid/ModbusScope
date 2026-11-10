@@ -1,9 +1,9 @@
 #pragma once
-// 聚合头：只 include 项目头，不 include Qt。
-#include "modbusscope/version.h"
-#include "modbusscope/error.h"
+// Aggregate header: public C++17 API only, no Qt headers.
 #include "Rust_error_deal/error_deal.h"
-#include "modbusscope/state.h"
-#include "modbusscope/config.h"
-#include "modbusscope/request.h"
 #include "modbusscope/client.h"
+#include "modbusscope/config.h"
+#include "modbusscope/registerCodec.h"
+#include "modbusscope/request.h"
+#include "modbusscope/state.h"
+#include "modbusscope/version.h"

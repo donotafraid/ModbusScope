@@ -50,8 +50,7 @@ int main(int argc, char **argv) {
     }
     std::unique_ptr<modbusscope::Client> client = std::move(*created.get());
 
-    auto state = client->state();
-    check(state.is_success() && *state.get() == modbusscope::LifeState::READY,
+    check(client->state() == modbusscope::LifeState::READY,
           "create() returns READY");
 
     modbusscope::ReadRequest read;
@@ -118,8 +117,7 @@ int main(int argc, char **argv) {
 
     auto disconnected = client->disconnect();
     check(disconnected.is_success(), "disconnect");
-    auto idle = client->state();
-    check(idle.is_success() && *idle.get() == modbusscope::LifeState::IDLE,
+    check(client->state() == modbusscope::LifeState::IDLE,
           "state is IDLE after disconnect");
 
     auto reconnected = client->connect();
@@ -133,8 +131,7 @@ int main(int argc, char **argv) {
 
     auto shutdown = client->shutdown();
     check(shutdown.is_success(), "shutdown");
-    auto closed = client->state();
-    check(closed.is_success() && *closed.get() == modbusscope::LifeState::CLOSED,
+    check(client->state() == modbusscope::LifeState::CLOSED,
           "state is CLOSED after shutdown");
 
     std::cout << (failures == 0 ? "SMOKE PASS" : "SMOKE FAIL") << '\n';

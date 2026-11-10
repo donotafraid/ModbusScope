@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# The static library compiles QtSerialBus into the consumer's link line, so the
+# Qt targets must exist even though no public header includes Qt.
+find_dependency(Qt5 5.15.3 EXACT COMPONENTS Core Network SerialBus)
+
+include("${CMAKE_CURRENT_LIST_DIR}/modbusScopeTargets.cmake")
+
+check_required_components(modbusScope)

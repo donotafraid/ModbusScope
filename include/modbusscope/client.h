@@ -46,13 +46,17 @@ public:
     Result<ReadResponse, RichError> read(const ReadRequest &request) noexcept;
 
     // Blocking 0x06/0x10 write. Thread-safe; never retried automatically.
+    // On success the response has been checked against the request echo.
     Result<WriteResponse, RichError> write(const WriteRequest &request) noexcept;
 
-    // Cheap, non-blocking snapshot. CLOSED after shutdown().
-    Result<LifeState, RichError> state() const noexcept;
+    // Atomic, non-blocking local state snapshot. It never round-trips to the
+    // transport, so it cannot observe a half-open TCP connection by itself;
+    // consecutive request timeouts drive RECOVERING instead.
+    LifeState state() const noexcept;
 
     // Idempotent. Waits for in-flight calls, stops the watchdog and the
-    // transport thread, then marks CLOSED.
+    // transport thread, then marks CLOSED. Returns IN_FLIGHT_TIMEOUT if the
+    // drain deadline expires; the transport is still stopped in that case.
     Result<Unit, RichError> shutdown() noexcept;
 
 private:

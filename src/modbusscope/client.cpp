@@ -118,10 +118,8 @@ RichError::ErrorCode to_rich_error(ErrorCode code) noexcept {
     case ErrorCode::NotConnected:       return RichError::ErrorCode::NOT_CONNECTED;
     case ErrorCode::Timeout:            return RichError::ErrorCode::TIMEOUT;
     case ErrorCode::ProtocolError:      return RichError::ErrorCode::SERVICE_FAILED;
-    case ErrorCode::ConnectionFailed:   return RichError::ErrorCode::CONNECT_TIMEOUT;
-    case ErrorCode::UnsupportedFunction:return RichError::ErrorCode::TYPE_NOTSUPPORT;
+    case ErrorCode::ConnectionFailed:   return RichError::ErrorCode::CONNECTION_FAILED;
     case ErrorCode::Closed:             return RichError::ErrorCode::ALREADY_TERMINATED;
-    case ErrorCode::Busy:               return RichError::ErrorCode::THREAD_BUSY;
     case ErrorCode::Internal:           return RichError::ErrorCode::INTERNAL_ERROR;
     }
     return RichError::ErrorCode::UNKNOWN;
@@ -433,11 +431,14 @@ private:
 
         {
             std::unique_lock<std::mutex> lock(m_lifeMutex);
+            // A caller waits at most operationTimeout + kSdkCallWaitGraceMs
+            // inside RealSdk. Give the drain one more second for scheduling so
+            // a healthy in-flight call is never reported as IN_FLIGHT_TIMEOUT.
             const auto grace =
                 std::chrono::milliseconds(
                     std::max<std::uint32_t>(m_config.requestTimeoutMs,
                                             m_config.connectTimeoutMs) +
-                    1000);
+                    detail::kSdkCallWaitGraceMs + 1000);
             const bool drained = m_idleCv.wait_for(
                 lock, grace,
                 [this] { return m_inFlight == 0; });
@@ -636,13 +637,11 @@ Client::write(const WriteRequest &request) noexcept {
     return m_impl->write(request);
 }
 
-Result<LifeState, RichError> Client::state() const noexcept {
+LifeState Client::state() const noexcept {
     if (!m_impl) {
-        return Result<LifeState, RichError>::error(
-            RichError{RichError::ErrorCode::ALREADY_TERMINATED,
-                      "state: client is null"});
+        return LifeState::CLOSED;
     }
-    return Result<LifeState, RichError>::success(m_impl->life());
+    return m_impl->life();
 }
 
 Result<Unit, RichError> Client::shutdown() noexcept {

@@ -9,6 +9,12 @@
 
 namespace modbusscope::detail {
 
+// Extra time a caller waits beyond the operation's own timeout before it gives
+// up on the transport thread. The transport always has a bounded nested event
+// loop, so this only protects against a wedged thread. Client::Impl also uses
+// it to size the shutdown drain deadline.
+inline constexpr std::uint32_t kSdkCallWaitGraceMs = 2000;
+
 // Internal synchronous seam over the transport. Implementations are not
 // required to be thread-safe; Client::Impl serializes every call.
 class ISdk {

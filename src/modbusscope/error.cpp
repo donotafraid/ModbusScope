@@ -14,9 +14,7 @@ const char *message_for(ErrorCode code) noexcept {
     case ErrorCode::Timeout:            return "Timeout";
     case ErrorCode::ProtocolError:      return "Modbus protocol error";
     case ErrorCode::ConnectionFailed:   return "Connection failed";
-    case ErrorCode::UnsupportedFunction:return "Unsupported function code";
     case ErrorCode::Closed:             return "Client is closed";
-    case ErrorCode::Busy:               return "Client is busy";
     case ErrorCode::Internal:           return "Internal error";
     }
     return "Unknown error";
@@ -63,23 +61,6 @@ const char *to_string(LifeState state) noexcept {
     case LifeState::RECOVERING: return "RECOVERING";
     case LifeState::GIVEN_UP:   return "GIVEN_UP";
     case LifeState::CLOSED:     return "CLOSED";
-    }
-    return "UNKNOWN";
-}
-
-const char *to_string(SessionEvent event) noexcept {
-    switch (event) {
-    case SessionEvent::Connect:          return "Connect";
-    case SessionEvent::ConnectSucceeded: return "ConnectSucceeded";
-    case SessionEvent::ConnectFailed:    return "ConnectFailed";
-    case SessionEvent::RequestIssued:    return "RequestIssued";
-    case SessionEvent::RequestSucceeded: return "RequestSucceeded";
-    case SessionEvent::RequestFailed:    return "RequestFailed";
-    case SessionEvent::Disconnect:       return "Disconnect";
-    case SessionEvent::Shutdown:         return "Shutdown";
-    case SessionEvent::NullPtr:          return "NullPtr";
-    case SessionEvent::ThreadBusy:       return "ThreadBusy";
-    case SessionEvent::Unknown:          return "Unknown";
     }
     return "UNKNOWN";
 }
