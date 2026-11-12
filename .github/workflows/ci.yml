@@ -19,9 +19,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git python3-pip \
-            clang-17 \
+            build-essential cmake git python3-pip wget \
             qtbase5-dev libqt5serialbus5-dev
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
 
       - name: Install GTest through Conan
         run: |
@@ -66,8 +70,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git python3-pip \
-            clang-17 qtbase5-dev libqt5serialbus5-dev
+            build-essential cmake git python3-pip wget \
+            qtbase5-dev libqt5serialbus5-dev
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
       - name: Install GTest through Conan
         run: |
           python3 -m pip install --user conan
@@ -104,8 +113,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git python3-pip \
-            clang-17 qtbase5-dev libqt5serialbus5-dev
+            build-essential cmake git python3-pip wget \
+            qtbase5-dev libqt5serialbus5-dev
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          sudo apt-get install -y libc++-17-dev libc++abi-17-dev ccache
+          clang-17 --version
       - name: Install GTest through Conan
         run: |
           python3 -m pip install --user conan
