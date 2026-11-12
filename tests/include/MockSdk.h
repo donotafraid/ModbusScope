@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -55,6 +56,14 @@ public:
         if (delayMs > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
         }
+        if (m_blockNextRead.exchange(false, std::memory_order_acq_rel)) {
+            std::unique_lock<std::mutex> gate(m_gateMutex);
+            m_readEntered = true;
+            m_gateCv.notify_all();
+            m_gateCv.wait(gate, [this] { return m_readReleased; });
+            m_readReleased = false;
+            m_readEntered = false;
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         ++m_readCalls;
         if (m_readCode != ErrorCode::Ok) {
@@ -98,6 +107,7 @@ public:
         m_started = false;
         m_state = LifeState::IDLE;
         ++m_stopCalls;
+        stopCount().fetch_add(1, std::memory_order_relaxed);
     }
 
     void setStartCode(ErrorCode code) {
@@ -126,6 +136,31 @@ public:
     }
     void setReadDelayMs(int delayMs) {
         m_readDelayMs.store(delayMs, std::memory_order_release);
+    }
+
+    // Gate the next read() so a test can hold a call inside the SDK while it
+    // shuts the Client down. waitReadEntered() returns false on timeout.
+    void blockNextRead() {
+        m_blockNextRead.store(true, std::memory_order_release);
+    }
+
+    bool waitReadEntered(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(m_gateMutex);
+        return m_gateCv.wait_for(lock, timeout,
+                                 [this] { return m_readEntered; });
+    }
+
+    void releaseBlockedRead() {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        m_readReleased = true;
+        m_gateCv.notify_all();
+    }
+
+    // Survives the MockSdk object so a test can assert the deferred stop ran
+    // after the last in-flight call released the implementation.
+    static std::atomic<unsigned> &stopCount() {
+        static std::atomic<unsigned> count{0};
+        return count;
     }
 
     unsigned connectCalls() const {
@@ -165,6 +200,11 @@ private:
     unsigned m_writeCalls = 0;
     unsigned m_stopCalls = 0;
     std::atomic<int> m_readDelayMs{0};
+    std::atomic<bool> m_blockNextRead{false};
+    std::mutex m_gateMutex;
+    std::condition_variable m_gateCv;
+    bool m_readEntered = false;
+    bool m_readReleased = false;
 };
 
 } // namespace modbusscope::test

@@ -86,6 +86,11 @@ Scope worker ──> ScopeModel::Impl (std::thread)
   `std::future` with a deadline. The transport lambda owns heap-allocated input
   and output (`ReadCall` / `WriteCall`), so a late lambda cannot touch a caller
   stack frame.
+- `Client::Impl` is owned by `std::shared_ptr` and derives from
+  `std::enable_shared_from_this`. Every blocking entry point takes a snapshot
+  before it uses the implementation, so a shutdown that times out cannot free
+  the Impl under an in-flight call; the last caller performs the deferred
+  transport stop.
 - `state()` reads an atomic snapshot only. It does not take the call lock and it
   cannot detect a half-open TCP connection by itself.
 - The watchdog thread observes the transport and reconnects within
@@ -111,9 +116,9 @@ serialized. Do not describe it as high-concurrency throughput.
   settings; it is not instantaneous.
 - `shutdown()` stops the watchdog, waits for in-flight calls up to
   `max(requestTimeoutMs, connectTimeoutMs) + 3 s`, then stops the transport. If
-  the drain deadline expires it returns `IN_FLIGHT_TIMEOUT` instead of reporting
-  success. The transport is still stopped, so destruction cannot terminate the
-  process.
+  the drain deadline expires it returns `IN_FLIGHT_TIMEOUT`; the in-flight call
+  keeps the Impl alive and performs the deferred transport stop when it returns,
+  so destruction cannot free state under a live call or terminate the process.
 - `~Client()` calls `shutdown()`. The caller must not destroy the object while
   another thread is still entering a method on it.
 
@@ -133,6 +138,12 @@ grid, traces, legend, status pill and hover readout with `QPainter`.
 Defaults: four holding registers at addresses 0..3, unit id 1, 250 ms poll
 interval, 600 samples per channel. The demo starts polling immediately and
 exposes Start / Pause / Resume / Clear.
+
+Channels that share `(function, unitId)` and have contiguous addresses are
+merged into one Modbus request (up to 125 registers); duplicate addresses share a
+single value. `ScopeReadPlan` is a pure function with unit tests, so a gap,
+unit/function change, or the 125-register ceiling cannot silently merge
+unrelated addresses.
 
 The UI state mapping is intentionally two-stage:
 
@@ -163,7 +174,18 @@ conan install . -pr:a=build.profile \
       --output-folder=conan_debug_build --build=missing
 ```
 
-Then configure with the generated toolchain:
+Then use the script entry points (they configure on first use, unset the libc++
+environment variables, and start their own Modbus server):
+
+```sh
+./scripts/run_all.sh                  # build + CTest + integration clients
+./scripts/run_tests.sh                # same test matrix, no GUI launch
+./scripts/run_scope.sh                # local server + Scope window
+./scripts/run_scope.sh --screenshot scope.png
+./scripts/run_sanitizers.sh all       # ASan, LSan, TSan
+```
+
+The manual configure is still available:
 
 ```sh
 unset CXXFLAGS LDFLAGS
@@ -189,52 +211,40 @@ GCC_LIBDIR=$(dirname "$(gcc -print-file-name=libstdc++.so)")
 
 ## Test
 
-CTest registers 45 cases:
+CTest registers 54 cases:
 
 - gtest: configuration and request validation, error mapping, the Client state
   machine with `MockSdk`, timeout escalation, recovery/GIVEN_UP, shutdown drain,
-  multi-caller serialization, the Qt-free codec, Scope ring buffers and the
-  full `ScopePresentation` table.
+  the shutdown-timeout lifetime regression, multi-caller serialization, the
+  Qt-free codec, the Scope read planner, ring buffers and the full
+  `ScopePresentation` table.
 - `ScopeWidget` offscreen render smoke test.
 - no-`QCoreApplication` guard, refused-vs-timeout mapping, Rule-of-Five /
   encapsulation probe, write-echo fault injection.
+- installed-package consumer (`install_consumer`): installs the tree into a
+  throwaway prefix and builds an out-of-tree `find_package(modbusScope)` consumer
+  that forces a real library symbol.
 
-The integration clients need `tests/modbus_server.py`:
-
-```sh
-python3 tests/modbus_server.py --port 15020 &
-./build/bin/modbus_client_smoke 127.0.0.1 15020
-./build/bin/modbus_client_stress 127.0.0.1 15020 8
-
-python3 tests/modbus_server.py --port 15021 --drop-after 3 &
-./build/bin/modbus_client_recovery 127.0.0.1 15021
-
-bash tests/run_p1_regression.sh build
-bash tests/run_p2_regression.sh build
-```
+`./scripts/run_tests.sh` runs CTest and then the integration clients:
+`modbus_client_smoke`, `modbus_client_stress` (8 threads) and
+`modbus_client_recovery` against `tests/modbus_server.py --drop-after 3`.
+Use `--no-integration` on machines where a local listen socket is forbidden.
 
 Sanitizers:
 
 ```sh
-cmake -S . -B build-asan -DENABLE_ASAN=ON -DCMAKE_CXX_COMPILER=clang++-17 \
-      -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake
-cmake --build build-asan -j
-ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build-asan --output-on-failure
-ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan -E ScopeWidget \
-      --output-on-failure
-
-cmake -S . -B build-tsan -DENABLE_TSAN=ON -DCMAKE_CXX_COMPILER=clang++-17 \
-      -DCMAKE_TOOLCHAIN_FILE=conan_debug_build/conan_toolchain.cmake
-cmake --build build-tsan -j
-setarch "$(uname -m)" -R ctest --test-dir build-tsan --output-on-failure
+./scripts/run_sanitizers.sh asan   # ASan + UBSan, leak detection off
+./scripts/run_sanitizers.sh lsan   # LSan with tests/lsan.supp
+./scripts/run_sanitizers.sh tsan   # TSan, setarch -R when available
 ```
 
-`ScopeWidget` is excluded from the LSan run because the Qt `offscreen` platform
-plugin keeps process-lifetime allocations. Its rendering is still exercised by
-ASan/UBSan and TSan.
+`ScopeWidget` is included in the LSan run now. The Qt `offscreen` plugin keeps
+process-lifetime allocations; `tests/lsan.supp` suppresses only those shared
+libraries, so allocations in the statically linked project are still checked.
 
 `scripts/quickstart.sh` installs missing Qt/Clang packages, runs the Conan
-install, configures, builds and runs CTest.
+install, configures, builds and runs CTest. It is the fresh-machine path;
+`run_all.sh` is the day-to-day path.
 
 ## Install and consume
 
@@ -257,10 +267,14 @@ need Qt include directories to use the core headers. The GUI target carries
 - Modbus TCP only. RTU and TLS are not implemented.
 - Unit id is validated to 1..247; broadcast (0) is rejected because the wrapper
   waits for a reply.
-- `requestTimeoutMs` and `connectTimeoutMs` must be at least 10 ms.
+- `requestTimeoutMs` and `connectTimeoutMs` must be at least 10 ms. Both are
+  capped at 600 s per attempt; a larger configured value is treated as 600 s.
 - No configuration hot reload; `ClientConfig` is a read-only snapshot.
 - No automatic write retry. A retry policy belongs to the caller.
 - The half-open detector needs traffic or OS keepalive; it is not a heartbeat.
-- Each Scope channel is one register read per poll. There is no block-read
-  grouping yet, so N channels mean N serial Modbus requests per sample.
+- A shutdown that exceeds the drain deadline returns `IN_FLIGHT_TIMEOUT` and
+  leaves the transport to the last in-flight call. If that call never returns,
+  the Impl remains alive by design instead of being freed under the call.
+- Scope merges only contiguous addresses in the same `(function, unitId)` group;
+  it does not read across gaps to reduce request count further.
 - See [docs/limitations.md](docs/limitations.md) for the remaining P3 items.

@@ -1,6 +1,7 @@
 #include "modbusscope/scope.h"
 
 #include "modbusscope/client.h"
+#include "detail/scopeReadPlan.h"
 
 #include <algorithm>
 #include <atomic>
@@ -20,6 +21,86 @@
 #include <vector>
 
 namespace modbusscope {
+namespace detail {
+
+ScopeReadPlan plan_scope_reads(
+    const std::vector<ScopeChannelConfig> &channels) {
+    ScopeReadPlan plan;
+    plan.channelRun.assign(channels.size(), 0);
+    plan.channelOffset.assign(channels.size(), 0);
+    if (channels.empty()) {
+        return plan;
+    }
+
+    std::vector<std::size_t> order(channels.size());
+    for (std::size_t index = 0; index < order.size(); ++index) {
+        order[index] = index;
+    }
+    std::sort(order.begin(), order.end(),
+              [&channels](std::size_t left, std::size_t right) {
+                  const auto &a = channels[left];
+                  const auto &b = channels[right];
+                  const auto key = [](const ScopeChannelConfig &channel) {
+                      return (static_cast<unsigned>(channel.function) << 8) |
+                             channel.unitId;
+                  };
+                  if (key(a) != key(b)) {
+                      return key(a) < key(b);
+                  }
+                  if (a.address != b.address) {
+                      return a.address < b.address;
+                  }
+                  return left < right;
+              });
+
+    for (std::size_t index : order) {
+        const auto &channel = channels[index];
+        bool placed = false;
+        if (!plan.runs.empty()) {
+            ScopeReadRun &run = plan.runs.back();
+            const std::uint32_t runEnd =
+                static_cast<std::uint32_t>(run.startAddress) + run.quantity;
+            if (run.function == channel.function &&
+                run.unitId == channel.unitId &&
+                channel.address >= run.startAddress &&
+                channel.address < runEnd) {
+                // Duplicate or overlapping address: one request serves both.
+                plan.channelRun[index] = plan.runs.size() - 1;
+                plan.channelOffset[index] =
+                    static_cast<std::uint16_t>(channel.address -
+                                               run.startAddress);
+                run.channels.push_back(index);
+                placed = true;
+            } else if (run.function == channel.function &&
+                       run.unitId == channel.unitId &&
+                       channel.address == runEnd &&
+                       run.quantity < kMaxReadRegisters) {
+                ++run.quantity;
+                plan.channelRun[index] = plan.runs.size() - 1;
+                plan.channelOffset[index] =
+                    static_cast<std::uint16_t>(run.quantity - 1);
+                run.channels.push_back(index);
+                placed = true;
+            }
+        }
+        if (placed) {
+            continue;
+        }
+        ScopeReadRun run;
+        run.function = channel.function;
+        run.unitId = channel.unitId;
+        run.startAddress = channel.address;
+        run.quantity = 1;
+        run.channels.push_back(index);
+        plan.channelRun[index] = plan.runs.size();
+        plan.channelOffset[index] = 0;
+        plan.runs.push_back(std::move(run));
+    }
+    return plan;
+}
+
+} // namespace detail
+
 namespace {
 
 constexpr std::uint32_t kMinPollIntervalMs = 1;
@@ -101,39 +182,44 @@ public:
                                                 : m_createError});
         }
 
-        std::vector<double> values;
-        values.reserve(channels.size());
-        for (const auto &channel : channels) {
+        std::vector<double> values(channels.size(), 0.0);
+        const detail::ScopeReadPlan plan = detail::plan_scope_reads(channels);
+        for (const auto &run : plan.runs) {
             ReadRequest request;
-            request.function = channel.function;
-            request.unitId = channel.unitId;
-            request.startAddress = channel.address;
-            request.quantity = 1;
+            request.function = run.function;
+            request.unitId = run.unitId;
+            request.startAddress = run.startAddress;
+            request.quantity = run.quantity;
 
             auto result = m_client->read(request);
             if (result.is_fail()) {
                 const RichError error = *result.get_error();
-                if (m_client->state() == LifeState::GIVEN_UP ||
-                    m_client->state() == LifeState::CLOSED) {
+                const LifeState transport = m_client->state();
+                if (transport == LifeState::GIVEN_UP ||
+                    transport == LifeState::CLOSED) {
                     reset_client();
                 }
                 return Result<std::vector<double>, RichError>::error(error);
             }
             const auto &registers = result.get()->registers;
-            if (registers.empty()) {
+            if (registers.size() != static_cast<std::size_t>(run.quantity)) {
                 return Result<std::vector<double>, RichError>::error(
                     RichError{RichError::ErrorCode::SERVICE_FAILED,
-                              "scope read returned an empty register vector"});
+                              "scope read returned an unexpected register count"});
             }
-            const double value =
-                static_cast<double>(registers.front()) * channel.scale +
-                channel.offset;
-            if (!std::isfinite(value)) {
-                return Result<std::vector<double>, RichError>::error(
-                    RichError{RichError::ErrorCode::SERVICE_FAILED,
-                              "scaled channel value is not finite"});
+            for (std::size_t channelIndex : run.channels) {
+                const auto &channel = channels[channelIndex];
+                const std::size_t sampleOffset = plan.channelOffset[channelIndex];
+                const double value =
+                    static_cast<double>(registers[sampleOffset]) * channel.scale +
+                    channel.offset;
+                if (!std::isfinite(value)) {
+                    return Result<std::vector<double>, RichError>::error(
+                        RichError{RichError::ErrorCode::SERVICE_FAILED,
+                                  "scaled channel value is not finite"});
+                }
+                values[channelIndex] = value;
             }
-            values.push_back(value);
         }
         return Result<std::vector<double>, RichError>::success(std::move(values));
     }

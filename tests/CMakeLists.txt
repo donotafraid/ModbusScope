@@ -79,9 +79,11 @@ if(GTest_FOUND)
     add_executable(modbus_unit_tests
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/api_validation_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/client_state_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/unit/client_lifetime_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/codec_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/scope_model_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/scope_presentation_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/unit/scope_read_plan_test.cpp
     )
     target_compile_features(modbus_unit_tests PRIVATE cxx_std_17)
     target_compile_definitions(modbus_unit_tests PRIVATE
@@ -135,4 +137,22 @@ else()
         "GTest was not found; the gtest unit suite is disabled. "
         "Run `conan install . -s build_type=Debug --build=missing` "
         "or install the system GTest package.")
+endif()
+
+# Installed-package probe. It installs into the test binary directory and
+# configures a small out-of-tree consumer, so a broken export fails CTest rather
+# than being caught by a one-off manual check. Sanitizer builds are skipped
+# because the consumer would need the matching sanitizer runtime on its link
+# line; the normal build already proves the exported target.
+if(NOT ENABLE_ASAN AND NOT ENABLE_LSAN AND NOT ENABLE_TSAN)
+    add_test(
+        NAME install_consumer
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_install_consumer.sh
+                ${CMAKE_BINARY_DIR}
+                ${CMAKE_CURRENT_BINARY_DIR}/consumer-prefix
+    )
+    set_tests_properties(install_consumer PROPERTIES
+        TIMEOUT 180
+        RUN_SERIAL TRUE
+    )
 endif()

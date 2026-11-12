@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>

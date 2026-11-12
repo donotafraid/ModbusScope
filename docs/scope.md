@@ -124,7 +124,10 @@ Official references:
 
 ## Sampling semantics
 
-- One channel is one register. `value = registers[0] * scale + offset`.
+- One channel is one register. `value = registers[channelOffset] * scale + offset`.
+- Channels are grouped by `(function, unitId)`; contiguous addresses share one
+  request, up to 125 registers. A gap starts a new request. Duplicate addresses
+  share one value.
 - A successful poll appends one sample per channel and increments `sequence`.
 - A failed poll sets `Faulted` and `lastError`; the worker keeps retrying.
 - A successful poll clears `lastError` and returns to `Running`.
@@ -139,6 +142,10 @@ Official references:
 `tests/unit/scope_model_test.cpp` covers ring capacity, pause/resume, fault and
 recovery, clear, stop/restart and invalid configuration.
 
+`tests/unit/scope_read_plan_test.cpp` covers contiguous merging, address gaps,
+unit/function splits, duplicate addresses, the 125-register ceiling and original
+channel order.
+
 `tests/unit/scope_presentation_test.cpp` covers every row of the mapping table.
 
 `tests/unit/scope_widget_test.cpp` creates a `QApplication` with
@@ -147,10 +154,13 @@ recovery, clear, stop/restart and invalid configuration.
 
 ## Limits
 
-- No block-read grouping. N channels means N serial requests per sample.
-- No per-channel timeout; the Client's `requestTimeoutMs` applies.
+- Channels are merged only when addresses are contiguous; a sparse map still
+  costs one request per gap.
+- No per-channel timeout; the Client's `requestTimeoutMs` applies to each
+  merged request.
 - The widget copies the whole visible history on every refresh. For the default
   600 samples x 8 channels this is small; a larger history needs a shared
   snapshot or incremental append.
-- The Qt `offscreen` platform plugin keeps process-lifetime allocations, so the
-  widget smoke test is excluded from the LSan gate; core unit tests are not.
+- The Qt `offscreen` platform plugin keeps process-lifetime allocations. LSan
+  runs the widget test with `tests/lsan.supp` suppressing only those libraries;
+  project objects are still checked.

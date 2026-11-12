@@ -1,4 +1,5 @@
 #include "detail/realSdk.h"
+#include "detail/threadName.h"
 
 #include <QAbstractSocket>
 #include <QCoreApplication>
@@ -302,19 +303,19 @@ public:
 
         const QModbusDevice::Error error = reply->error();
         const QString errorText = reply->errorString();
-        const QModbusDataUnit result = reply->result();
-        const QModbusResponse raw = reply->rawResult();
 
         if (error != QModbusDevice::NoError) {
-            if (!errorText.isEmpty()) {
+            if (detail && !errorText.isEmpty()) {
                 *detail = errorText.toStdString();
             }
+            const QModbusResponse raw = reply->rawResult();
             if (error == QModbusDevice::ProtocolError) {
                 append_exception_code(detail, raw);
             }
             return map_device_error(error);
         }
 
+        const QModbusDataUnit result = reply->result();
         if (result.valueCount() != request.quantity ||
             result.values().size() != static_cast<int>(request.quantity)) {
             if (detail) {
@@ -566,6 +567,7 @@ public:
 
 protected:
     void run() override {
+        set_current_thread_name("modbus-qt");
         try {
             Transport transport(m_requestTimeoutMs);
             {
@@ -606,6 +608,11 @@ struct RealSdk::Impl {
         : thread(requestTimeoutMs) {}
 
     TransportThread thread;
+    // Serializes "read the transport pointer + post the functor" against
+    // stop(). Without it, stop() could destroy the stack-allocated Transport
+    // between transport() and invokeMethod().
+    std::mutex dispatchMutex;
+    bool stopping = false;
 };
 
 RealSdk::RealSdk(std::uint32_t requestTimeoutMs)
@@ -633,35 +640,42 @@ bool RealSdk::start(std::string *error) {
 
 ErrorCode RealSdk::connect(const TcpEndpoint &endpoint, std::uint32_t timeoutMs,
                            std::string *detail) {
-    if (!m_impl || !m_impl->thread.isRunning()) {
+    if (!m_impl) {
         return ErrorCode::NotConnected;
-    }
-    Transport *transport = m_impl->thread.transport();
-    if (!transport) {
-        return ErrorCode::Internal;
     }
     auto call = std::make_shared<ConnectCall>();
     call->endpoint = endpoint;
     call->timeoutMs = timeoutMs;
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
-    const bool posted = QMetaObject::invokeMethod(
-        transport,
-        [transport, call, promise] {
-            try {
-                call->code =
-                    transport->connectSync(call->endpoint, call->timeoutMs,
-                                           &call->detail);
-            } catch (...) {
-                call->exception = std::current_exception();
-            }
-            try {
-                promise->set_value();
-            } catch (...) {
-                // Only one producer exists; a duplicate set_value is ignored.
-            }
-        },
-        Qt::QueuedConnection);
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> dispatch(m_impl->dispatchMutex);
+        if (m_impl->stopping || !m_impl->thread.isRunning()) {
+            return ErrorCode::NotConnected;
+        }
+        Transport *transport = m_impl->thread.transport();
+        if (!transport) {
+            return ErrorCode::Internal;
+        }
+        posted = QMetaObject::invokeMethod(
+            transport,
+            [transport, call, promise] {
+                try {
+                    call->code =
+                        transport->connectSync(call->endpoint, call->timeoutMs,
+                                               &call->detail);
+                } catch (...) {
+                    call->exception = std::current_exception();
+                }
+                try {
+                    promise->set_value();
+                } catch (...) {
+                    // Only one producer exists; a duplicate set_value is ignored.
+                }
+            },
+            Qt::QueuedConnection);
+    }
     if (!posted) {
         return ErrorCode::Internal;
     }
@@ -679,32 +693,39 @@ ErrorCode RealSdk::connect(const TcpEndpoint &endpoint, std::uint32_t timeoutMs,
 }
 
 ErrorCode RealSdk::disconnect(std::uint32_t timeoutMs, std::string *detail) {
-    if (!m_impl || !m_impl->thread.isRunning()) {
+    if (!m_impl) {
         return ErrorCode::Ok;
-    }
-    Transport *transport = m_impl->thread.transport();
-    if (!transport) {
-        return ErrorCode::Internal;
     }
     auto call = std::make_shared<DisconnectCall>();
     call->timeoutMs = timeoutMs;
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
-    const bool posted = QMetaObject::invokeMethod(
-        transport,
-        [transport, call, promise] {
-            try {
-                call->code =
-                    transport->disconnectSync(call->timeoutMs, &call->detail);
-            } catch (...) {
-                call->exception = std::current_exception();
-            }
-            try {
-                promise->set_value();
-            } catch (...) {
-            }
-        },
-        Qt::QueuedConnection);
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> dispatch(m_impl->dispatchMutex);
+        if (m_impl->stopping || !m_impl->thread.isRunning()) {
+            return ErrorCode::Ok;
+        }
+        Transport *transport = m_impl->thread.transport();
+        if (!transport) {
+            return ErrorCode::Internal;
+        }
+        posted = QMetaObject::invokeMethod(
+            transport,
+            [transport, call, promise] {
+                try {
+                    call->code =
+                        transport->disconnectSync(call->timeoutMs, &call->detail);
+                } catch (...) {
+                    call->exception = std::current_exception();
+                }
+                try {
+                    promise->set_value();
+                } catch (...) {
+                }
+            },
+            Qt::QueuedConnection);
+    }
     if (!posted) {
         return ErrorCode::Internal;
     }
@@ -723,34 +744,41 @@ ErrorCode RealSdk::disconnect(std::uint32_t timeoutMs, std::string *detail) {
 
 ErrorCode RealSdk::read(const ReadRequest &request, std::uint32_t timeoutMs,
                         ReadResponse *response, std::string *detail) {
-    if (!m_impl || !m_impl->thread.isRunning()) {
+    if (!m_impl) {
         return ErrorCode::NotConnected;
-    }
-    Transport *transport = m_impl->thread.transport();
-    if (!transport) {
-        return ErrorCode::Internal;
     }
     auto call = std::make_shared<ReadCall>();
     call->request = request;
     call->timeoutMs = timeoutMs;
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
-    const bool posted = QMetaObject::invokeMethod(
-        transport,
-        [transport, call, promise] {
-            try {
-                call->code =
-                    transport->readSync(call->request, call->timeoutMs,
-                                        &call->response, &call->detail);
-            } catch (...) {
-                call->exception = std::current_exception();
-            }
-            try {
-                promise->set_value();
-            } catch (...) {
-            }
-        },
-        Qt::QueuedConnection);
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> dispatch(m_impl->dispatchMutex);
+        if (m_impl->stopping || !m_impl->thread.isRunning()) {
+            return ErrorCode::NotConnected;
+        }
+        Transport *transport = m_impl->thread.transport();
+        if (!transport) {
+            return ErrorCode::Internal;
+        }
+        posted = QMetaObject::invokeMethod(
+            transport,
+            [transport, call, promise] {
+                try {
+                    call->code =
+                        transport->readSync(call->request, call->timeoutMs,
+                                            &call->response, &call->detail);
+                } catch (...) {
+                    call->exception = std::current_exception();
+                }
+                try {
+                    promise->set_value();
+                } catch (...) {
+                }
+            },
+            Qt::QueuedConnection);
+    }
     if (!posted) {
         return ErrorCode::Internal;
     }
@@ -772,34 +800,41 @@ ErrorCode RealSdk::read(const ReadRequest &request, std::uint32_t timeoutMs,
 
 ErrorCode RealSdk::write(const WriteRequest &request, std::uint32_t timeoutMs,
                          WriteResponse *response, std::string *detail) {
-    if (!m_impl || !m_impl->thread.isRunning()) {
+    if (!m_impl) {
         return ErrorCode::NotConnected;
-    }
-    Transport *transport = m_impl->thread.transport();
-    if (!transport) {
-        return ErrorCode::Internal;
     }
     auto call = std::make_shared<WriteCall>();
     call->request = request;
     call->timeoutMs = timeoutMs;
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
-    const bool posted = QMetaObject::invokeMethod(
-        transport,
-        [transport, call, promise] {
-            try {
-                call->code =
-                    transport->writeSync(call->request, call->timeoutMs,
-                                         &call->response, &call->detail);
-            } catch (...) {
-                call->exception = std::current_exception();
-            }
-            try {
-                promise->set_value();
-            } catch (...) {
-            }
-        },
-        Qt::QueuedConnection);
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> dispatch(m_impl->dispatchMutex);
+        if (m_impl->stopping || !m_impl->thread.isRunning()) {
+            return ErrorCode::NotConnected;
+        }
+        Transport *transport = m_impl->thread.transport();
+        if (!transport) {
+            return ErrorCode::Internal;
+        }
+        posted = QMetaObject::invokeMethod(
+            transport,
+            [transport, call, promise] {
+                try {
+                    call->code =
+                        transport->writeSync(call->request, call->timeoutMs,
+                                             &call->response, &call->detail);
+                } catch (...) {
+                    call->exception = std::current_exception();
+                }
+                try {
+                    promise->set_value();
+                } catch (...) {
+                }
+            },
+            Qt::QueuedConnection);
+    }
     if (!posted) {
         return ErrorCode::Internal;
     }
@@ -820,43 +855,50 @@ ErrorCode RealSdk::write(const WriteRequest &request, std::uint32_t timeoutMs,
 }
 
 LifeState RealSdk::state() const {
-    if (!m_impl || !m_impl->thread.isRunning()) {
-        return LifeState::IDLE;
-    }
-    Transport *transport = m_impl->thread.transport();
-    if (!transport) {
+    if (!m_impl) {
         return LifeState::IDLE;
     }
     auto call = std::make_shared<StateCall>();
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
-    const bool posted = QMetaObject::invokeMethod(
-        transport,
-        [transport, call, promise] {
-            try {
-                switch (transport->state()) {
-                case QModbusDevice::UnconnectedState:
-                    call->value = LifeState::IDLE;
-                    break;
-                case QModbusDevice::ConnectingState:
-                    call->value = LifeState::CONNECTING;
-                    break;
-                case QModbusDevice::ConnectedState:
-                    call->value = LifeState::READY;
-                    break;
-                case QModbusDevice::ClosingState:
-                    call->value = LifeState::RECOVERING;
-                    break;
+    bool posted = false;
+    {
+        std::lock_guard<std::mutex> dispatch(m_impl->dispatchMutex);
+        if (m_impl->stopping || !m_impl->thread.isRunning()) {
+            return LifeState::IDLE;
+        }
+        Transport *transport = m_impl->thread.transport();
+        if (!transport) {
+            return LifeState::IDLE;
+        }
+        posted = QMetaObject::invokeMethod(
+            transport,
+            [transport, call, promise] {
+                try {
+                    switch (transport->state()) {
+                    case QModbusDevice::UnconnectedState:
+                        call->value = LifeState::IDLE;
+                        break;
+                    case QModbusDevice::ConnectingState:
+                        call->value = LifeState::CONNECTING;
+                        break;
+                    case QModbusDevice::ConnectedState:
+                        call->value = LifeState::READY;
+                        break;
+                    case QModbusDevice::ClosingState:
+                        call->value = LifeState::RECOVERING;
+                        break;
+                    }
+                } catch (...) {
+                    call->exception = std::current_exception();
                 }
-            } catch (...) {
-                call->exception = std::current_exception();
-            }
-            try {
-                promise->set_value();
-            } catch (...) {
-            }
-        },
-        Qt::QueuedConnection);
+                try {
+                    promise->set_value();
+                } catch (...) {
+                }
+            },
+            Qt::QueuedConnection);
+    }
     if (!posted) {
         return LifeState::IDLE;
     }
@@ -871,9 +913,17 @@ LifeState RealSdk::state() const {
 }
 
 void RealSdk::stop() noexcept {
-    if (m_impl) {
-        m_impl->thread.stop();
+    if (!m_impl) {
+        return;
     }
+    {
+        std::lock_guard<std::mutex> lock(m_impl->dispatchMutex);
+        if (m_impl->stopping) {
+            return;
+        }
+        m_impl->stopping = true;
+    }
+    m_impl->thread.stop();
 }
 
 } // namespace modbusscope::detail

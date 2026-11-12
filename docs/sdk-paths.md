@@ -178,17 +178,31 @@ Client::shutdown
      -> m_idleCv.wait_for(
           max(requestTimeoutMs, connectTimeoutMs) + 2 s + 1 s,
           m_inFlight == 0)
-     -> if timeout: m_shutdownTimedOut = true
-     -> m_sdk->stop()
-        -> TransportThread::quit()
-        -> QThread::wait(5 s)
-        -> if still running: terminate(); wait()
-     -> m_life = CLOSED
+     -> if drained:
+          stop_transport_once()
+            -> m_sdk->stop()
+               -> TransportThread::quit()
+               -> QThread::wait(5 s)
+               -> if still running: terminate(); wait()
+            -> m_life = CLOSED
+        else:
+          m_stopTransportWhenIdle = true
+          m_shutdownTimedOut = true
+          m_life = CLOSED
+          return IN_FLIGHT_TIMEOUT
   -> IN_FLIGHT_TIMEOUT if drain failed, otherwise success
+
+last in-flight call leaves Impl::read/write
+  -> Lease::~Lease decrements m_inFlight to 0
+  -> reads m_stopTransportWhenIdle
+  -> stop_transport_once()      // safe: the call still owns a shared_ptr<Impl>
+  -> shared_ptr<Impl> released; ~Impl() runs on this thread
 ```
 
-`~Client()` calls `shutdown()` and ignores the result. The transport is stopped
-even on a failed drain, so `std::thread` destruction cannot call `terminate()`.
+`~Client()` moves `m_impl` into a local before `shutdown()`, so the last
+`shared_ptr` belongs to whichever in-flight call is still finishing. The
+transport is not stopped under a live SDK call; a `std::thread` destruction
+therefore never calls `terminate()`.
 
 Official references:
 
@@ -211,13 +225,17 @@ ScopeModel::start
               -> Client::create (first poll only)
                  -> RealSdk::start
                     -> QThread::start -> QEventLoop
-              -> for each channel:
-                   Client::read
+              -> plan_scope_reads(channels)
+                 -> group by (function, unitId)
+                 -> merge contiguous addresses; split at 125 registers
+              -> for each run:
+                   Client::read(run)
                      -> RealSdk::read
                         -> QMetaObject::invokeMethod(transport, ...)
                         -> QEventLoop in Transport::readSync
                         -> QModbusReply::finished / TimeoutError
-              -> value = registers[0] * scale + offset
+              -> values[channel] = registers[channelOffset]
+                                    * scale + offset
         -> ScopeModel::Impl::publish_success
            -> lock m_mutex
            -> append ring buffer, update min/max/latest, ++sequence

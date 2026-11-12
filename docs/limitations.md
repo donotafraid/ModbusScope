@@ -30,22 +30,32 @@ finished features.
 
 - `ClientConfig` is an immutable snapshot. No hot reload and no per-call timeout.
 - `Client::state()` is a local snapshot; it can be `READY` while the peer is gone.
+- `connectTimeoutMs` and `requestTimeoutMs` are capped at 600 s per attempt
+  (`bounded_timeout()`). A larger configured value is treated as 600 s; the cap
+  is not a separate configuration field.
 - `registerCodec.h` is a small helper set, not a full type system. It has no
   float64, byte-order enum beyond `WordOrder64`, or scaling/engineering units.
 - No connection pool, no request batching and no pipelining.
+- A shutdown drain that exceeds its deadline returns `IN_FLIGHT_TIMEOUT` and
+  defers the SDK stop to the last in-flight call. The Client wrapper may be
+  destroyed, but the Impl stays alive until that call returns. If the call never
+  returns, the Impl is intentionally retained rather than freed under the call.
 
 ## Repository evidence
 
-- CTest registers 45 cases. The gtest suite uses `MockSdk` for the Client state
-  machine and `FakeScopeSource` for the Scope model; the smoke/stress/recovery/P1
-  integration clients still need a manually started `tests/modbus_server.py`.
-- `ScopeWidget` is excluded from the LSan gate because the Qt `offscreen`
-  platform plugin keeps process-lifetime allocations. ASan/UBSan and TSan still
-  run the widget render test.
-- Each Scope channel is one register read per poll. Block-read grouping is not
-  implemented.
-- The installed-package consumer probe is still manual; the export exists and
-  was checked outside CTest.
+- CTest registers 54 cases in a normal build (47 in a sanitizer build, where the
+  installed-package consumer is skipped). The gtest suite uses `MockSdk` for the
+  Client state machine and `FakeScopeSource` for the Scope model. The
+  smoke/stress/recovery clients are started by `scripts/run_tests.sh`, which owns
+  the Python server lifetime.
+- `ScopeWidget` is included in the LSan gate. `tests/lsan.supp` suppresses the
+  Qt `offscreen` plugin's process-lifetime libraries only; the statically linked
+  project objects are still checked.
+- Scope channels are grouped by `(function, unitId)` and merged when their
+  addresses are contiguous, up to 125 registers. The planner never reads across
+  a gap; `ScopeReadPlan` has its own unit tests.
+- `install_consumer` installs into a throwaway prefix and builds an out-of-tree
+  `find_package(modbusScope)` consumer, so the export is exercised by CTest.
 - `.github/workflows/ci.yml` is checked in but was not executed in the review
   session. Only local build/CTest/sanitizer evidence is available.
 
@@ -53,6 +63,9 @@ finished features.
 
 1. Add a virtual clock to the Client watchdog so recovery-window tests do not
    sleep.
-2. Add block-read grouping to the Scope source for contiguous channels.
-3. Add the installed-package consumer probe to CTest.
-4. Replace the manual integration-server steps with a pytest/CTest fixture.
+2. Add a WebSocket/RTU transport only if the product needs it; the current facade
+   is TCP-specific by design.
+3. Replace the Python integration server with a CTest fixture that allocates a
+   free port, so parallel CTest runs cannot collide.
+4. Add a Windows `SetThreadDescription` implementation for thread names; Linux
+   already uses `pthread_setname_np`.

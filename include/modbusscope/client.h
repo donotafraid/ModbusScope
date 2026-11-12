@@ -23,10 +23,12 @@ class ISdk;
 // transport are serialized on a private worker thread; the public methods block
 // the calling thread until the request completes or times out.
 //
-// Destruction: the caller must stop using the object before destroying it.
-// ~Client() calls shutdown(), so a concurrent call that is still inside read()
-// keeps the object alive only through the caller's own ownership (for example a
-// std::shared_ptr); this class does not extend its own lifetime.
+// Lifetime: the implementation is held by std::shared_ptr and derives from
+// std::enable_shared_from_this. Every blocking entry point takes a shared_ptr
+// snapshot before it touches the transport, so the implementation outlives a
+// concurrent ~Client() even when the shutdown drain deadline expires. The
+// public Client object itself is still caller-owned: do not destroy it while
+// another thread is calling into it.
 class Client final {
 public:
     // Unique creation entry. Returns an error instead of throwing, including
@@ -80,7 +82,8 @@ public:
 
     // Idempotent. Waits for in-flight calls, stops the watchdog and the
     // transport thread, then marks CLOSED. Returns IN_FLIGHT_TIMEOUT if the
-    // drain deadline expires; the transport is still stopped in that case.
+    // drain deadline expires. In that case the transport is stopped by the
+    // last in-flight call when it leaves the implementation, not here.
     Result<Unit, RichError> shutdown() noexcept;
 
 private:
@@ -91,7 +94,7 @@ private:
                 std::unique_ptr<detail::ISdk> sdk) noexcept;
     void pump_watchdog() noexcept;
 
-    std::unique_ptr<Impl> m_impl;
+    std::shared_ptr<Impl> m_impl;
 };
 
 } // namespace modbusscope

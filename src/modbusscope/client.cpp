@@ -1,6 +1,7 @@
 #include "modbusscope/client.h"
 
 #include "detail/realSdk.h"
+#include "detail/threadName.h"
 
 #include <algorithm>
 #include <atomic>
@@ -137,7 +138,7 @@ std::int64_t now_ms() noexcept {
 
 } // namespace
 
-class Client::Impl {
+class Client::Impl : public std::enable_shared_from_this<Client::Impl> {
 public:
     Impl(ClientConfig config, std::unique_ptr<detail::ISdk> sdk)
         : m_config(std::move(config)),
@@ -169,6 +170,8 @@ public:
     }
 
     Result<Unit, RichError> connect() noexcept {
+        const auto keepAlive = shared_from_this();
+        (void)keepAlive; // Outlives ~Client() until this call returns.
         Lease lease(this);
         if (!lease.active()) {
             return error(ErrorCode::Closed, "connect: client is closed");
@@ -193,6 +196,10 @@ public:
         std::string detail;
         const ErrorCode code =
             m_sdk->connect(m_config.endpoint, m_config.connectTimeoutMs, &detail);
+        if (stop_deferred()) {
+            return error(ErrorCode::Closed,
+                         "connect: client shut down while the call was in flight");
+        }
         if (code == ErrorCode::Ok) {
             m_life.store(LifeState::READY, std::memory_order_release);
             reset_bad();
@@ -206,6 +213,8 @@ public:
     }
 
     Result<Unit, RichError> disconnect() noexcept {
+        const auto keepAlive = shared_from_this();
+        (void)keepAlive;
         Lease lease(this);
         if (!lease.active()) {
             return error(ErrorCode::Closed, "disconnect: client is closed");
@@ -230,6 +239,10 @@ public:
 
         std::string detail;
         const ErrorCode code = m_sdk->disconnect(m_config.connectTimeoutMs, &detail);
+        if (stop_deferred()) {
+            return error(ErrorCode::Closed,
+                         "disconnect: client shut down while the call was in flight");
+        }
         if (code == ErrorCode::Ok) {
             m_life.store(LifeState::IDLE, std::memory_order_release);
             m_badSinceMs = 0;
@@ -240,6 +253,8 @@ public:
     }
 
     Result<ReadResponse, RichError> read(const ReadRequest &request) noexcept {
+        const auto keepAlive = shared_from_this();
+        (void)keepAlive;
         Lease lease(this);
         if (!lease.active()) {
             return read_error(ErrorCode::Closed, "read: client is closed");
@@ -259,6 +274,10 @@ public:
         std::string detail;
         const ErrorCode code = m_sdk->read(
             request, m_config.requestTimeoutMs, &response, &detail);
+        if (stop_deferred()) {
+            return read_error(ErrorCode::Closed,
+                              "read: client shut down while the call was in flight");
+        }
         if (code == ErrorCode::Ok) {
             m_consecutiveTimeouts = 0;
             if (m_life.load(std::memory_order_acquire) == LifeState::READY) {
@@ -284,6 +303,8 @@ public:
     }
 
     Result<WriteResponse, RichError> write(const WriteRequest &request) noexcept {
+        const auto keepAlive = shared_from_this();
+        (void)keepAlive;
         Lease lease(this);
         if (!lease.active()) {
             return write_error(ErrorCode::Closed, "write: client is closed");
@@ -303,6 +324,10 @@ public:
         std::string detail;
         const ErrorCode code = m_sdk->write(
             request, m_config.requestTimeoutMs, &response, &detail);
+        if (stop_deferred()) {
+            return write_error(ErrorCode::Closed,
+                               "write: client shut down while the call was in flight");
+        }
         if (code == ErrorCode::Ok) {
             m_consecutiveTimeouts = 0;
             if (m_life.load(std::memory_order_acquire) == LifeState::READY) {
@@ -361,9 +386,21 @@ private:
             if (!m_active) {
                 return;
             }
-            std::lock_guard<std::mutex> lock(m_impl->m_lifeMutex);
-            if (--m_impl->m_inFlight == 0) {
-                m_impl->m_idleCv.notify_all();
+            bool stopTransport = false;
+            {
+                std::lock_guard<std::mutex> lock(m_impl->m_lifeMutex);
+                if (--m_impl->m_inFlight == 0) {
+                    m_impl->m_idleCv.notify_all();
+                    // A shutdown that timed out left the SDK running so that
+                    // this call could return through a live transport object.
+                    // The last lease performs the deferred stop while the
+                    // implementation is still alive.
+                    stopTransport = m_impl->m_stopTransportWhenIdle.load(
+                        std::memory_order_acquire);
+                }
+            }
+            if (stopTransport) {
+                m_impl->stop_transport_once();
             }
         }
 
@@ -401,6 +438,14 @@ private:
         }
     }
 
+    // True when shutdown gave up on the drain and the transport is still
+    // running. State transitions are forbidden in that window: m_life must stay
+    // terminal, and the call reports ALREADY_TERMINATED.
+    bool stop_deferred() const noexcept {
+        return m_terminated.load(std::memory_order_acquire) &&
+               m_stopTransportWhenIdle.load(std::memory_order_acquire);
+    }
+
     void reset_bad() noexcept { m_badSinceMs = 0; }
 
     // A request timeout without FIN from the peer leaves QTcpSocket in
@@ -408,6 +453,9 @@ private:
     // watchdog performs a real reconnect instead of connectSync() returning
     // Ok on the still-"connected" half-open socket.
     void enter_recovery() noexcept {
+        if (m_terminated.load(std::memory_order_acquire)) {
+            return;
+        }
         m_recoveryEnabled.store(true, std::memory_order_release);
         m_life.store(LifeState::RECOVERING, std::memory_order_release);
         mark_bad();
@@ -435,6 +483,7 @@ private:
             m_watchdog.detach();
         }
 
+        bool drained = false;
         {
             std::unique_lock<std::mutex> lock(m_lifeMutex);
             // A caller waits at most operationTimeout + kSdkCallWaitGraceMs
@@ -445,19 +494,36 @@ private:
                     std::max<std::uint32_t>(m_config.requestTimeoutMs,
                                             m_config.connectTimeoutMs) +
                     detail::kSdkCallWaitGraceMs + 1000);
-            const bool drained = m_idleCv.wait_for(
+            drained = m_idleCv.wait_for(
                 lock, grace,
                 [this] { return m_inFlight == 0; });
             if (!drained) {
-                m_shutdownTimedOut.store(true, std::memory_order_release);
+                // Keep the transport alive: an in-flight call is still using
+                // IMPL and may be inside the SDK. The last Lease stops it.
+                m_stopTransportWhenIdle.store(true, std::memory_order_release);
             }
         }
 
-        m_sdk->stop();
         m_life.store(LifeState::CLOSED, std::memory_order_release);
+        if (!drained) {
+            m_shutdownTimedOut.store(true, std::memory_order_release);
+            return;
+        }
+        stop_transport_once();
+    }
+
+    // Stops the SDK at most once. Called by the drain-complete path, or by the
+    // last Lease when shutdown timed out. m_sdk stays alive because Impl is
+    // owned by shared_ptr snapshots taken by the in-flight calls.
+    void stop_transport_once() noexcept {
+        std::call_once(m_transportStopOnce, [this] {
+            m_sdk->stop();
+            m_life.store(LifeState::CLOSED, std::memory_order_release);
+        });
     }
 
     void watchdog_loop() noexcept {
+        detail::set_current_thread_name("modbus-watchdog");
         std::unique_lock<std::mutex> lock(m_watchdogMutex);
         while (!m_watchdogStop.load(std::memory_order_acquire)) {
             m_watchdogCv.wait_for(
@@ -541,6 +607,8 @@ private:
     std::int64_t m_badSinceMs = 0;      // guarded by m_callMutex
     int m_consecutiveTimeouts = 0;      // guarded by m_callMutex
     std::atomic<bool> m_shutdownTimedOut{false};
+    std::atomic<bool> m_stopTransportWhenIdle{false};
+    std::once_flag m_transportStopOnce;
 
     std::thread m_watchdog;
     std::mutex m_watchdogMutex;
@@ -549,11 +617,14 @@ private:
 };
 
 Client::Client(ClientConfig config, std::unique_ptr<detail::ISdk> sdk)
-    : m_impl(std::make_unique<Impl>(std::move(config), std::move(sdk))) {}
+    : m_impl(std::make_shared<Impl>(std::move(config), std::move(sdk))) {}
 
 Client::~Client() noexcept {
-    if (m_impl) {
-        m_impl->shutdown();
+    // Move the shared_ptr out first: in-flight calls keep the Impl alive even
+    // if shutdown() times out, and the last caller performs the deferred stop.
+    auto impl = std::move(m_impl);
+    if (impl) {
+        impl->shutdown();
     }
 }
 
@@ -619,55 +690,61 @@ Client::create_impl(ClientConfig config,
 }
 
 Result<Unit, RichError> Client::connect() noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return Result<Unit, RichError>::error(
             RichError{RichError::ErrorCode::ALREADY_TERMINATED,
                       "connect: client is null"});
     }
-    return m_impl->connect();
+    return impl->connect();
 }
 
 Result<Unit, RichError> Client::disconnect() noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return Result<Unit, RichError>::error(
             RichError{RichError::ErrorCode::ALREADY_TERMINATED,
                       "disconnect: client is null"});
     }
-    return m_impl->disconnect();
+    return impl->disconnect();
 }
 
 Result<ReadResponse, RichError>
 Client::read(const ReadRequest &request) noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return Result<ReadResponse, RichError>::error(
             RichError{RichError::ErrorCode::ALREADY_TERMINATED,
                       "read: client is null"});
     }
-    return m_impl->read(request);
+    return impl->read(request);
 }
 
 Result<WriteResponse, RichError>
 Client::write(const WriteRequest &request) noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return Result<WriteResponse, RichError>::error(
             RichError{RichError::ErrorCode::ALREADY_TERMINATED,
                       "write: client is null"});
     }
-    return m_impl->write(request);
+    return impl->write(request);
 }
 
 LifeState Client::state() const noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return LifeState::CLOSED;
     }
-    return m_impl->life();
+    return impl->life();
 }
 
 Result<Unit, RichError> Client::shutdown() noexcept {
-    if (!m_impl) {
+    auto impl = m_impl;
+    if (!impl) {
         return Result<Unit, RichError>::success(Unit{});
     }
-    return m_impl->shutdown();
+    return impl->shutdown();
 }
 
 } // namespace modbusscope

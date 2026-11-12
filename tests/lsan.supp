@@ -1,0 +1,11 @@
+# LSan suppressions for the Qt offscreen platform plugin.
+#
+# The plugin allocates process-lifetime state (platform screen, font database,
+# QPA backing store) that is never freed before main() returns. Those allocations
+# are not owned by modbusscope. Project allocations are still checked because
+# the library itself is statically linked and has no suppression entry.
+leak:libqoffscreen.so
+leak:libQt5Core.so
+leak:libQt5Gui.so
+leak:libfontconfig.so
+leak:libfreetype.so

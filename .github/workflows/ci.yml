@@ -87,8 +87,11 @@ jobs:
         run: cmake --build build-asan -j
       - name: ASan+UBSan CTest
         run: ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build-asan --output-on-failure
-      - name: LSan CTest (ScopeWidget excluded)
-        run: ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan -E ScopeWidget --output-on-failure
+      - name: LSan CTest (Qt offscreen suppressed)
+        run: |
+          ASAN_OPTIONS=detect_leaks=1 \
+          LSAN_OPTIONS=suppressions="${GITHUB_WORKSPACE}/tests/lsan.supp" \
+            ctest --test-dir build-asan --output-on-failure
 
   tsan:
     runs-on: ubuntu-22.04
