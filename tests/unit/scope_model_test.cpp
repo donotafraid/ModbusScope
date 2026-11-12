@@ -237,3 +237,152 @@ TEST(ScopeModel, PauseResumeAndClearRejectInvalidStates) {
               RichError::ErrorCode::INVALID_STATE);
     EXPECT_TRUE(fixture.model->clear().is_success());
 }
+
+TEST(ScopeModel, PauseBeforeFirstPollDoesNotWaitForThePollInterval) {
+    auto fixture = makeModel({1.0}, {channel("a")}, 5000, 10);
+    ASSERT_TRUE(fixture.model);
+    ASSERT_TRUE(fixture.model->start().is_success());
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto paused = fixture.model->pause();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    ASSERT_TRUE(paused.is_success());
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed),
+              std::chrono::milliseconds(1000));
+    EXPECT_EQ(fixture.model->run_state(),
+              modbusscope::ScopeRunState::Paused);
+    EXPECT_TRUE(fixture.model->stop().is_success());
+}
+
+TEST(ScopeModel, AddAndRemoveChannelsOnlyWhileEditable) {
+    auto fixture = makeModel({10.0}, {channel("a")}, 5, 100);
+    ASSERT_TRUE(fixture.model);
+
+    auto added = fixture.model->addChannel(channel("b", 1));
+    ASSERT_TRUE(added.is_success());
+    const modbusscope::ChannelId secondId = *added.get();
+    EXPECT_NE(secondId, 0u);
+    auto snapshot = fixture.model->snapshot();
+    ASSERT_EQ(snapshot.channels.size(), 2u);
+    EXPECT_EQ(snapshot.channels[0].id, 1u);
+    EXPECT_EQ(snapshot.channels[1].id, secondId);
+    EXPECT_EQ(snapshot.readTaskCount, 1u);
+
+    fixture.source->setValues({10.0, 20.0});
+    ASSERT_TRUE(fixture.model->start().is_success());
+    ASSERT_TRUE(waitUntil([&] {
+        const auto current = fixture.model->snapshot();
+        return current.channels.size() == 2u &&
+               current.channels[1].samples.size() >= 2;
+    }));
+
+    auto bad = channel("bad", 3);
+    bad.function = modbusscope::FunctionCode::WriteSingleRegister;
+    EXPECT_EQ(fixture.model->addChannel(bad).get_error()->code(),
+              RichError::ErrorCode::INVALID_STATE);
+    EXPECT_EQ(fixture.model->removeChannel(secondId).get_error()->code(),
+              RichError::ErrorCode::INVALID_STATE);
+
+    ASSERT_TRUE(fixture.model->pause().is_success());
+    auto input = channel("input", 100);
+    input.function = modbusscope::FunctionCode::ReadInputRegisters;
+    auto addedInput = fixture.model->addChannel(input);
+    ASSERT_TRUE(addedInput.is_success());
+    const modbusscope::ChannelId inputId = *addedInput.get();
+    snapshot = fixture.model->snapshot();
+    ASSERT_EQ(snapshot.channels.size(), 3u);
+    EXPECT_EQ(snapshot.readTaskCount, 2u);
+
+    EXPECT_EQ(fixture.model->addChannel(bad).get_error()->code(),
+              RichError::ErrorCode::INVALID_ARGUMENT);
+    EXPECT_EQ(fixture.model->removeChannel(999999).get_error()->code(),
+              RichError::ErrorCode::INVALID_ARGUMENT);
+
+    ASSERT_TRUE(fixture.model->removeChannel(inputId).is_success());
+    snapshot = fixture.model->snapshot();
+    EXPECT_EQ(snapshot.channels.size(), 2u);
+    EXPECT_EQ(snapshot.readTaskCount, 1u);
+    EXPECT_TRUE(fixture.model->stop().is_success());
+}
+
+TEST(ScopeModel, PauseWaitsForAnInFlightReadBeforeMutation) {
+    auto fixture = makeModel({1.0}, {channel("a")}, 1, 100);
+    ASSERT_TRUE(fixture.model);
+    fixture.source->setDelayMs(80);
+    ASSERT_TRUE(fixture.model->start().is_success());
+    ASSERT_TRUE(waitUntil([&] { return fixture.source->inFlight() == 1; }));
+
+    ASSERT_TRUE(fixture.model->pause().is_success());
+    EXPECT_EQ(fixture.source->inFlight(), 0);
+    auto added = fixture.model->addChannel(channel("b", 1));
+    ASSERT_TRUE(added.is_success());
+    EXPECT_TRUE(fixture.model->stop().is_success());
+}
+
+TEST(ScopeModel, RemovingTheLastChannelStopsReadsUntilOneIsAdded) {
+    auto fixture = makeModel({7.0}, {channel("a")}, 5, 100);
+    ASSERT_TRUE(fixture.model);
+    ASSERT_TRUE(fixture.model->start().is_success());
+    ASSERT_TRUE(waitUntil([&] { return fixture.source->polls() > 0; }));
+    ASSERT_TRUE(fixture.model->pause().is_success());
+
+    const auto only = fixture.model->snapshot().channels.front().id;
+    ASSERT_TRUE(fixture.model->removeChannel(only).is_success());
+    auto snapshot = fixture.model->snapshot();
+    EXPECT_TRUE(snapshot.channels.empty());
+    EXPECT_EQ(snapshot.readTaskCount, 0u);
+
+    ASSERT_TRUE(fixture.model->resume().is_success());
+    const int pollsBefore = fixture.source->polls();
+    std::this_thread::sleep_for(40ms);
+    EXPECT_EQ(fixture.source->polls(), pollsBefore);
+    EXPECT_EQ(fixture.model->addChannel(channel("late")).get_error()->code(),
+              RichError::ErrorCode::INVALID_STATE);
+
+    ASSERT_TRUE(fixture.model->pause().is_success());
+    fixture.source->setValues({7.0});
+    ASSERT_TRUE(fixture.model->addChannel(channel("a")).is_success());
+    ASSERT_TRUE(fixture.model->resume().is_success());
+    EXPECT_TRUE(waitUntil([&] {
+        return fixture.source->polls() > pollsBefore;
+    }));
+    EXPECT_TRUE(fixture.model->stop().is_success());
+}
+
+TEST(ScopeModel, AddingAndRemovingKeepsOtherChannelHistory) {
+    auto fixture = makeModel({1.0, 2.0},
+                             {channel("a", 0), channel("b", 1)}, 5, 100);
+    ASSERT_TRUE(fixture.model);
+    ASSERT_TRUE(fixture.model->start().is_success());
+    ASSERT_TRUE(waitUntil([&] {
+        const auto snapshot = fixture.model->snapshot();
+        return snapshot.channels.size() == 2u &&
+               snapshot.channels[0].samples.size() >= 2;
+    }));
+    ASSERT_TRUE(fixture.model->pause().is_success());
+
+    const auto before = fixture.model->snapshot();
+    const std::size_t firstSamples = before.channels[0].samples.size();
+    const modbusscope::ChannelId secondId = before.channels[1].id;
+    ASSERT_TRUE(fixture.model->removeChannel(secondId).is_success());
+    ASSERT_TRUE(fixture.model->addChannel(channel("c", 10)).is_success());
+
+    const auto edited = fixture.model->snapshot();
+    ASSERT_EQ(edited.channels.size(), 2u);
+    EXPECT_EQ(edited.channels[0].id, before.channels[0].id);
+    EXPECT_EQ(edited.channels[0].samples.size(), firstSamples);
+    EXPECT_TRUE(edited.channels[1].samples.empty());
+    EXPECT_EQ(edited.readTaskCount, 2u);
+
+    fixture.source->setValues({9.0, 10.0});
+    ASSERT_TRUE(fixture.model->resume().is_success());
+    EXPECT_TRUE(waitUntil([&] {
+        const auto snapshot = fixture.model->snapshot();
+        return snapshot.channels.size() == 2u &&
+               snapshot.channels[1].samples.size() >= 1;
+    }));
+    const auto live = fixture.model->snapshot();
+    EXPECT_DOUBLE_EQ(live.channels[0].latest, 9.0);
+    EXPECT_DOUBLE_EQ(live.channels[1].latest, 10.0);
+    EXPECT_TRUE(fixture.model->stop().is_success());
+}

@@ -1,7 +1,7 @@
 # CMake minimum and project languages. Keep the standard pinned: the public
 # headers and the Qt 5.15 implementation both rely on C++17.
 cmake_minimum_required(VERSION 3.15)
-project(modbusScope VERSION 0.1.0 LANGUAGES CXX C)
+project(modbusScope VERSION 0.2.0 LANGUAGES CXX C)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)

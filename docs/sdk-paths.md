@@ -220,6 +220,11 @@ ScopeModel::start
   -> ScopeModel::Impl::start
      -> std::thread(worker_loop)
         -> condition_variable.wait_for(pollIntervalMs)
+           or wait for !paused / stop
+        -> lock m_mutex
+        -> copy m_channels + m_configVersion
+        -> m_polling = true
+        -> unlock
         -> ScopeSource::read(channels)
            -> ClientScopeSource::read
               -> Client::create (first poll only)
@@ -238,23 +243,33 @@ ScopeModel::start
                                     * scale + offset
         -> ScopeModel::Impl::publish_success
            -> lock m_mutex
+           -> discard if configVersion changed
            -> append ring buffer, update min/max/latest, ++sequence
+        -> m_polling = false; notify m_pollingCv
 
 UI thread
   -> ScopeWidget::Impl::pull       (QTimer, default 100 ms)
      -> ScopeModel::snapshot()
         -> lock m_mutex, copy channels + samples + run/transport/error
+           + readTaskCount
      -> present(snapshot)
         -> ScopePresentation { label, color, hint, canStart, ... }
      -> QWidget::update()
         -> paintEvent
 ```
 
-`ScopeModel::pause()` stores `m_paused`, notifies the condition variable, and
-increments `sequence`. The worker may finish one in-flight poll; `publish_success`
-keeps the run state `Paused` in that case. `ScopeModel::clear()` drops samples and
-statistics but keeps the run state. `ScopeModel::stop()` joins the worker before
-calling `ScopeSource::stop()`.
+`ScopeModel::pause()` stores `m_paused`, notifies `m_cv`, and waits on
+`m_pollingCv` until the worker is outside both `ScopeSource::read()` and
+`publish_*`. The worker may finish one in-flight poll; `publish_success` keeps
+the run state `Paused` in that case. `addChannel()` / `removeChannel()` accept
+only `Paused` or `Stopped`, mutate `m_channels` + `m_buffers` under `m_mutex`,
+recompute `m_readTaskCount`, and bump `m_configVersion`. `ScopeModel::clear()`
+drops samples and statistics but keeps the run state. `ScopeModel::stop()` joins
+the worker before calling `ScopeSource::stop()`.
+
+The demo keeps one button per `ChannelId`; deleting calls
+`removeChannel(id)` instead of an index. The status bar prints
+`channels=` and `reads=` so merged read tasks are visible.
 
 The presentation table is the only place where `LifeState` becomes UI text and
 button affordances. See [scope.md](scope.md) for the full table.

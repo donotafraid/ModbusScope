@@ -12,6 +12,11 @@
 
 namespace modbusscope {
 
+// Stable identity of a Scope read object. Ids are unique for the lifetime of
+// one ScopeModel and are never reused, so UI buttons can safely capture them
+// across snapshots and channel-list rebuilds.
+using ChannelId = std::uint64_t;
+
 // One trace in the Scope view. A channel reads exactly one holding/input
 // register per poll and applies value = raw * scale + offset.
 struct ScopeChannelConfig {
@@ -29,6 +34,7 @@ struct ScopeSample {
 };
 
 struct ScopeChannelSnapshot {
+    ChannelId id = 0;
     ScopeChannelConfig config;
     std::vector<ScopeSample> samples;
     bool hasValue = false;
@@ -59,6 +65,9 @@ struct ScopeSnapshot {
     LifeState transport = LifeState::IDLE;
     std::uint64_t sequence = 0;
     std::vector<ScopeChannelSnapshot> channels;
+    // Number of Modbus requests needed by the current channel set after
+    // grouping by (function, unitId) and merging contiguous addresses.
+    std::size_t readTaskCount = 0;
     std::string lastError;
     std::int64_t lastSampleMs = 0;
 };
@@ -97,8 +106,15 @@ public:
 };
 
 // Thread-safe polling model. The public methods may be called from the UI
-// thread; polling happens on a private std::thread. Channels are immutable
-// after construction, so a poll never observes a half-edited channel list.
+// thread; polling happens on a private std::thread. The channel list can be
+// changed only while Paused or Stopped. pause() is a barrier: it waits for a
+// poll that is already in flight, so add/remove never races a read.
+//
+// The ScopeModel object itself is not safe to destroy while another thread is
+// inside a method. Hold it by std::shared_ptr (ScopeWidget does) or join callers
+// before destruction. Do not call pause()/addChannel()/removeChannel() from
+// inside ScopeSource::read(): the worker owns m_polling there and pause() would
+// wait on itself.
 class ScopeModel final {
 public:
     // Production entry: creates a Client from config on the worker thread.
@@ -127,8 +143,20 @@ public:
     Result<Unit, RichError> start() noexcept;
 
     // Paused retains the samples; the worker does not poll until resume().
+    // The call waits for a poll already in progress to publish and quiesce.
     Result<Unit, RichError> pause() noexcept;
     Result<Unit, RichError> resume() noexcept;
+
+    // Adds one read object. Allowed while Paused or Stopped; the returned id
+    // remains stable until removeChannel() succeeds. The new channel starts
+    // with empty history. Returns INVALID_STATE in any other run state.
+    Result<ChannelId, RichError>
+    addChannel(ScopeChannelConfig channel) noexcept;
+
+    // Removes one read object and its samples. Allowed while Paused or
+    // Stopped. Unknown ids return INVALID_ARGUMENT. Removing the last channel
+    // leaves a valid empty model that polls nothing until a channel is added.
+    Result<Unit, RichError> removeChannel(ChannelId id) noexcept;
 
     // Drops samples and statistics, keeps the worker state.
     Result<Unit, RichError> clear() noexcept;

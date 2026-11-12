@@ -33,12 +33,14 @@ constexpr int kRefreshMinMs = 16;
 constexpr int kRefreshMaxMs = 2000;
 constexpr int kDefaultRefreshMs = 100;
 
-QColor channelColor(std::size_t index) {
+QColor channelColor(modbusscope::ChannelId id) {
     static const char *const palette[] = {
         "#22d3ee", "#f59e0b", "#a78bfa", "#fb7185",
         "#34d399", "#60a5fa", "#f472b6", "#facc15",
     };
-    return QColor(QString::fromLatin1(palette[index % 8]));
+    const std::size_t slot =
+        static_cast<std::size_t>(id == 0 ? 0 : id - 1);
+    return QColor(QString::fromLatin1(palette[slot % 8]));
 }
 
 QString formatValue(double value) {
@@ -260,7 +262,7 @@ void ScopeWidget::paintEvent(QPaintEvent *event) {
                     ((sample.value - valueMin) / yRange) * plot.height();
                 points.push_back(QPointF(x, y));
             }
-            painter.setPen(QPen(channelColor(index), 1.8));
+            painter.setPen(QPen(channelColor(channel.id), 1.8));
             painter.drawPolyline(points);
         }
         painter.setClipping(false);
@@ -327,9 +329,13 @@ void ScopeWidget::paintEvent(QPaintEvent *event) {
         }
     } else {
         painter.setPen(QColor("#64748b"));
-        painter.drawText(plot, Qt::AlignCenter,
-                         QStringLiteral("No samples yet.\n"
-                                        "Start the model to acquire data."));
+        painter.drawText(
+            plot, Qt::AlignCenter,
+            snap.channels.empty()
+                ? QStringLiteral("No read objects.\n"
+                                 "Pause and add a register channel.")
+                : QStringLiteral("No samples yet.\n"
+                                 "Start the model to acquire data."));
     }
 
     // --- legend -----------------------------------------------------------
@@ -348,7 +354,7 @@ void ScopeWidget::paintEvent(QPaintEvent *event) {
             legendY += 22.0;
         }
         painter.setPen(Qt::NoPen);
-        painter.setBrush(channelColor(index));
+        painter.setBrush(channelColor(channel.id));
         painter.drawEllipse(QPointF(legendX + 5.0, legendY + 8.0), 5.0,
                             5.0);
         painter.setPen(QColor("#cbd5e1"));

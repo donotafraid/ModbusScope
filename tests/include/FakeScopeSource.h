@@ -20,6 +20,13 @@ public:
     Result<std::vector<double>, RichError>
     read(const std::vector<ScopeChannelConfig> &) override {
         m_polls.fetch_add(1, std::memory_order_relaxed);
+        m_inFlight.fetch_add(1, std::memory_order_acq_rel);
+        struct InFlightGuard {
+            std::atomic<int> &counter;
+            ~InFlightGuard() {
+                counter.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        } guard{m_inFlight};
         const int delayMs = m_delayMs.load(std::memory_order_acquire);
         if (delayMs > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
@@ -53,6 +60,9 @@ public:
     }
 
     int polls() const { return m_polls.load(std::memory_order_relaxed); }
+    int inFlight() const {
+        return m_inFlight.load(std::memory_order_acquire);
+    }
     bool stopped() const {
         return m_stopped.load(std::memory_order_acquire);
     }
@@ -65,6 +75,7 @@ private:
     std::atomic<LifeState> m_state{LifeState::READY};
     std::atomic<bool> m_stopped{false};
     std::atomic<int> m_polls{0};
+    std::atomic<int> m_inFlight{0};
     std::atomic<int> m_delayMs{0};
 };
 

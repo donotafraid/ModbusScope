@@ -93,6 +93,27 @@ TEST(ScopeWidget, RendersLiveSnapshotOffscreen) {
     widget.setModel(model);
     EXPECT_EQ(widget.statusText(), QStringLiteral("Paused"));
 
+    auto added = model->addChannel(channel("temperature"));
+    ASSERT_TRUE(added.is_success());
+    widget.setModel(model);
+    QApplication::processEvents();
+    const auto edited = widget.snapshot();
+    ASSERT_EQ(edited.channels.size(), 2u);
+    EXPECT_EQ(edited.channels[1].id, *added.get());
+    EXPECT_EQ(edited.readTaskCount, 1u);
+
+    QImage editedImage(widget.size(), QImage::Format_ARGB32);
+    editedImage.fill(Qt::transparent);
+    QPainter editedPainter(&editedImage);
+    widget.render(&editedPainter);
+    editedPainter.end();
+    EXPECT_FALSE(editedImage.isNull());
+
+    ASSERT_TRUE(model->removeChannel(*added.get()).is_success());
+    widget.setModel(model);
+    QApplication::processEvents();
+    EXPECT_EQ(widget.snapshot().channels.size(), 1u);
+
     widget.clearModel();
     EXPECT_EQ(widget.statusText(), QStringLiteral("Stopped"));
     EXPECT_TRUE(model->stop().is_success());

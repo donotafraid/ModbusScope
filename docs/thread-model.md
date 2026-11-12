@@ -105,17 +105,26 @@ adding `SetThreadDescription` is a P3 item.
 ScopeModel::Impl
  ├─ std::thread m_worker      polls ScopeSource::read()
  ├─ ScopeSource m_source      production: ClientScopeSource -> Client
- ├─ std::mutex m_mutex        guards ring buffers, run state, error
- └─ std::condition_variable   pause/stop wakeups
+ ├─ std::mutex m_mutex        guards channels, ring buffers, run state, error
+ ├─ std::condition_variable m_cv         interval/pause/stop wakeups
+ └─ std::condition_variable m_pollingCv  pause barrier (m_polling -> false)
 ```
 
-The UI thread calls `ScopeModel::snapshot()`, which copies the guarded state. The
-worker calls `Client::read()`, which is already serialized and thread-safe by the
-core client. `ScopeWidget::Impl` runs a `QTimer` on the GUI thread and paints the
-copied snapshot; the worker never calls `QWidget`, `QPainter` or `QTimer`.
+The UI thread calls `ScopeModel::snapshot()`, which copies the guarded state,
+including `readTaskCount` and stable channel ids. The worker calls
+`Client::read()`, which is already serialized and thread-safe by the core client.
+`ScopeWidget::Impl` runs a `QTimer` on the GUI thread and paints the copied
+snapshot; the worker never calls `QWidget`, `QPainter` or `QTimer`.
 
-`ScopeModel::stop()` sets the stop flag, notifies the condition variable, joins
-the worker, then calls `ScopeSource::stop()`. Joining before stopping the source
+The channel list is mutable only in `Paused` or `Stopped`. `pause()` sets
+`m_paused`, then waits on `m_pollingCv` until `m_polling` is false. The worker
+sets `m_polling` before copying `m_channels` and keeps it true through
+`publish_success()` / `publish_error()`, so a pause cannot return in the middle
+of a read or publish. `addChannel()` / `removeChannel()` hold `m_controlMutex` and
+`m_mutex`; `publish_*` also checks `m_configVersion` and discards stale results.
+
+`ScopeModel::stop()` sets the stop flag, notifies the worker wait path, joins the
+worker, then calls `ScopeSource::stop()`. Joining before stopping the source
 avoids a worker using a half-destroyed `Client`.
 
 ## Official references

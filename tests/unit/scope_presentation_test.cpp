@@ -33,12 +33,13 @@ TEST(ScopePresentation, StoppedStateStartsAndEdits) {
     EXPECT_FALSE(view.showError);
 }
 
-TEST(ScopePresentation, PausedStateResumesOnly) {
+TEST(ScopePresentation, PausedStateResumesAndAllowsChannelEditing) {
     const auto view = modbusscope::present(
         snapshot(modbusscope::ScopeRunState::Paused,
                  modbusscope::LifeState::READY));
     EXPECT_STREQ(view.label, "Paused");
     EXPECT_TRUE(view.canResume);
+    EXPECT_TRUE(view.canEditChannels);
     EXPECT_FALSE(view.canStart);
     EXPECT_FALSE(view.canPause);
 }
@@ -50,7 +51,16 @@ TEST(ScopePresentation, FaultedStateOffersRetryAndShowsError) {
     EXPECT_STREQ(view.label, "Fault");
     EXPECT_TRUE(view.canStart);
     EXPECT_TRUE(view.canPause);
+    EXPECT_FALSE(view.canEditChannels);
     EXPECT_TRUE(view.showError);
+}
+
+TEST(ScopePresentation, RunningStateDisallowsChannelEditing) {
+    const auto view = modbusscope::present(
+        snapshot(modbusscope::ScopeRunState::Running,
+                 modbusscope::LifeState::READY));
+    EXPECT_TRUE(view.canPause);
+    EXPECT_FALSE(view.canEditChannels);
 }
 
 TEST(ScopePresentation, RunningReadyIsLive) {

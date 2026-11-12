@@ -32,11 +32,15 @@ The Scope API is also Qt-free:
 | Type | Role |
 |---|---|
 | `ScopeChannelConfig` | one register address plus scale/offset |
+| `ChannelId` | stable id for a dynamic read object |
 | `ScopeModel` | pImpl polling worker and ring buffers |
 | `ScopeSource` | injectable transport seam (`ClientScopeSource` in production) |
-| `ScopeSnapshot` | immutable copy published to the UI thread |
+| `ScopeSnapshot` | immutable copy published to the UI thread, plus `readTaskCount` |
 | `ScopePresentation` | pure `ScopeSnapshot -> label/color/affordances` mapping |
 
+`ScopeModel::addChannel()` / `removeChannel()` edit the channel list while the
+model is `Paused` or `Stopped`. `pause()` is a barrier: it waits for a poll
+already in flight, so channel mutation never races `ScopeSource::read()`.
 `scopeWidget.h` adds `ScopeWidget`, a `QWidget` that paints a `ScopeSnapshot`.
 It is built into the separate `modbusScopeGui` target.
 
@@ -98,6 +102,11 @@ Scope worker ──> ScopeModel::Impl (std::thread)
 - The Scope worker is a plain `std::thread`. It only calls the thread-safe
   `Client`; the UI thread only reads `ScopeSnapshot` copies. No Qt object is
   touched from the Scope worker.
+- `ScopeModel::pause()` is a barrier. It waits for `m_polling` to become false
+  before returning; `addChannel()` / `removeChannel()` are accepted only while
+  paused or stopped. The worker copies the channel list under the model mutex
+  and checks `m_configVersion` before publishing, so a late read is discarded
+  rather than attached to a changed list.
 
 This is safe for many calling threads, but the single TCP connection is
 serialized. Do not describe it as high-concurrency throughput.
@@ -137,13 +146,17 @@ grid, traces, legend, status pill and hover readout with `QPainter`.
 
 Defaults: four holding registers at addresses 0..3, unit id 1, 250 ms poll
 interval, 600 samples per channel. The demo starts polling immediately and
-exposes Start / Pause / Resume / Clear.
+exposes Start / Pause / Resume / Clear / Add read object. While paused or
+stopped, Add opens a dialog for function code 0x03/0x04, address offset and unit
+id; every read object is a button with a delete key. `--paused` starts the demo
+in the editable paused state (useful for screenshots).
 
 Channels that share `(function, unitId)` and have contiguous addresses are
 merged into one Modbus request (up to 125 registers); duplicate addresses share a
-single value. `ScopeReadPlan` is a pure function with unit tests, so a gap,
-unit/function change, or the 125-register ceiling cannot silently merge
-unrelated addresses.
+single value. The demo status bar reports `reads=` so the effect of adding or
+deleting a read object is visible. `ScopeReadPlan` is a pure function with unit
+tests, so a gap, unit/function change, or the 125-register ceiling cannot
+silently merge unrelated addresses.
 
 The UI state mapping is intentionally two-stage:
 
@@ -154,7 +167,7 @@ The UI state mapping is intentionally two-stage:
 | `Running` | `IDLE`/`CONNECTING` before first sample | `Starting` | no | yes | no | no |
 | `Running` | `IDLE`/`CONNECTING`/`RECOVERING` | `Idle`/`Connecting`/`Recovering` | no | yes | no | no |
 | `Running` | `GIVEN_UP`/`CLOSED` | `Given up`/`Closed` | depends | yes | no | no |
-| `Paused` | any | `Paused` | no | no | yes | no |
+| `Paused` | any | `Paused` | no | no | yes | yes |
 | `Faulted` | any | `Fault` | yes | yes | no | no |
 
 `present()` owns this table, so it is unit-tested without a display. The widget
@@ -182,6 +195,7 @@ environment variables, and start their own Modbus server):
 ./scripts/run_tests.sh                # same test matrix, no GUI launch
 ./scripts/run_scope.sh                # local server + Scope window
 ./scripts/run_scope.sh --screenshot scope.png
+./scripts/run_scope.sh --paused --screenshot scope-paused.png
 ./scripts/run_sanitizers.sh all       # ASan, LSan, TSan
 ```
 
@@ -211,13 +225,13 @@ GCC_LIBDIR=$(dirname "$(gcc -print-file-name=libstdc++.so)")
 
 ## Test
 
-CTest registers 54 cases:
+CTest registers 60 cases:
 
 - gtest: configuration and request validation, error mapping, the Client state
   machine with `MockSdk`, timeout escalation, recovery/GIVEN_UP, shutdown drain,
   the shutdown-timeout lifetime regression, multi-caller serialization, the
-  Qt-free codec, the Scope read planner, ring buffers and the full
-  `ScopePresentation` table.
+  Qt-free codec, the Scope read planner, ring buffers, dynamic
+  add/remove, pause barriers and the full `ScopePresentation` table.
 - `ScopeWidget` offscreen render smoke test.
 - no-`QCoreApplication` guard, refused-vs-timeout mapping, Rule-of-Five /
   encapsulation probe, write-echo fault injection.
@@ -253,7 +267,7 @@ cmake --install build --prefix /opt/modbusscope
 ```
 
 ```cmake
-find_package(modbusScope 0.1 CONFIG REQUIRED)
+find_package(modbusScope 0.2 CONFIG REQUIRED)
 target_link_libraries(app PRIVATE modbusScope::modbusScope)   # Qt-free core
 target_link_libraries(app PRIVATE modbusScope::modbusScopeGui) # optional widget
 ```

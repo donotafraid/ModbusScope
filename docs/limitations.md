@@ -43,9 +43,10 @@ finished features.
 
 ## Repository evidence
 
-- CTest registers 54 cases in a normal build (47 in a sanitizer build, where the
+- CTest registers 60 cases in a normal build (59 in a sanitizer build, where the
   installed-package consumer is skipped). The gtest suite uses `MockSdk` for the
-  Client state machine and `FakeScopeSource` for the Scope model. The
+  Client state machine and `FakeScopeSource` for the Scope model, including the
+  pause barrier and dynamic add/remove. The
   smoke/stress/recovery clients are started by `scripts/run_tests.sh`, which owns
   the Python server lifetime.
 - `ScopeWidget` is included in the LSan gate. `tests/lsan.supp` suppresses the
@@ -53,7 +54,9 @@ finished features.
   project objects are still checked.
 - Scope channels are grouped by `(function, unitId)` and merged when their
   addresses are contiguous, up to 125 registers. The planner never reads across
-  a gap; `ScopeReadPlan` has its own unit tests.
+  a gap; `ScopeReadPlan` has its own unit tests. Channels can be added and removed
+  only while paused or stopped; `pause()` blocks the caller until an in-flight
+  poll finishes.
 - `install_consumer` installs into a throwaway prefix and builds an out-of-tree
   `find_package(modbusScope)` consumer, so the export is exercised by CTest.
 - `.github/workflows/ci.yml` is checked in but was not executed in the review

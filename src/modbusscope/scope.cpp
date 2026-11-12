@@ -283,7 +283,7 @@ ScopePresentation present(const ScopeSnapshot &snapshot) noexcept {
     case ScopeRunState::Stopped:
         view.label = "Stopped";
         view.color = "#94a3b8";
-        view.hint = "Not polling. Start to acquire samples.";
+        view.hint = "Not polling. Add channels, then start.";
         view.canStart = true;
         view.canEditChannels = true;
         view.showError = false;
@@ -292,9 +292,9 @@ ScopePresentation present(const ScopeSnapshot &snapshot) noexcept {
     case ScopeRunState::Paused:
         view.label = "Paused";
         view.color = "#38bdf8";
-        view.hint = "Polling paused; samples are retained.";
+        view.hint = "Paused. Add or remove channels, or resume.";
         view.canResume = true;
-        view.canEditChannels = false;
+        view.canEditChannels = true;
         return view;
 
     case ScopeRunState::Faulted:
@@ -376,8 +376,10 @@ public:
           m_pollIntervalMs(pollIntervalMs),
           m_historyCapacity(historyCapacity) {
         for (std::size_t index = 0; index < m_buffers.size(); ++index) {
+            m_buffers[index].id = m_nextChannelId++;
             m_buffers[index].config = m_channels[index];
         }
+        m_readTaskCount = detail::plan_scope_reads(m_channels).runs.size();
     }
 
     ~Impl() { (void)stop(); }
@@ -418,7 +420,7 @@ public:
 
     Result<Unit, RichError> pause() noexcept {
         std::lock_guard<std::mutex> control(m_controlMutex);
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
         if (m_run == ScopeRunState::Stopped) {
             return Result<Unit, RichError>::error(
                 RichError{RichError::ErrorCode::INVALID_STATE,
@@ -431,6 +433,14 @@ public:
         m_run = ScopeRunState::Paused;
         ++m_sequence;
         m_cv.notify_all();
+        // Barrier: addChannel/removeChannel must not modify the list while the
+        // worker is inside ScopeSource::read(). A poll already in flight is
+        // allowed to publish one last sample before pause returns. If no poll
+        // is in flight, the worker has already observed m_paused under this
+        // same mutex and cannot start one.
+        if (m_polling) {
+            m_pollingCv.wait(lock, [this] { return !m_polling; });
+        }
         return Result<Unit, RichError>::success(Unit{});
     }
 
@@ -447,6 +457,104 @@ public:
             m_run = ScopeRunState::Running;
             ++m_sequence;
             m_cv.notify_all();
+        }
+        return Result<Unit, RichError>::success(Unit{});
+    }
+
+    Result<ChannelId, RichError>
+    addChannel(ScopeChannelConfig channel) noexcept {
+        std::lock_guard<std::mutex> control(m_controlMutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!editable_locked()) {
+            return Result<ChannelId, RichError>::error(
+                RichError{RichError::ErrorCode::INVALID_STATE,
+                          "addChannel: pause or stop the scope first"});
+        }
+        std::string reason;
+        if (!validate_channel(channel, &reason)) {
+            return Result<ChannelId, RichError>::error(
+                RichError{RichError::ErrorCode::INVALID_ARGUMENT,
+                          std::move(reason)});
+        }
+        if (m_polling) {
+            m_pollingCv.wait(lock, [this] { return !m_polling; });
+        }
+
+        const ChannelId id = m_nextChannelId;
+        try {
+            m_channels.reserve(m_channels.size() + 1);
+            m_buffers.reserve(m_buffers.size() + 1);
+            m_channels.push_back(channel);
+            try {
+                ChannelBuffer buffer;
+                buffer.id = id;
+                buffer.config = channel;
+                m_buffers.push_back(std::move(buffer));
+            } catch (...) {
+                m_channels.pop_back();
+                throw;
+            }
+            try {
+                m_readTaskCount =
+                    detail::plan_scope_reads(m_channels).runs.size();
+            } catch (...) {
+                m_buffers.pop_back();
+                m_channels.pop_back();
+                throw;
+            }
+            ++m_nextChannelId;
+            ++m_configVersion;
+            ++m_sequence;
+            m_cv.notify_all();
+        } catch (const std::bad_alloc &) {
+            return Result<ChannelId, RichError>::error(
+                RichError{RichError::ErrorCode::INTERNAL_ERROR,
+                          "addChannel: allocation failed"});
+        }
+        return Result<ChannelId, RichError>::success(id);
+    }
+
+    Result<Unit, RichError> removeChannel(ChannelId id) noexcept {
+        std::lock_guard<std::mutex> control(m_controlMutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!editable_locked()) {
+            return Result<Unit, RichError>::error(
+                RichError{RichError::ErrorCode::INVALID_STATE,
+                          "removeChannel: pause or stop the scope first"});
+        }
+        const auto found =
+            std::find_if(m_buffers.begin(), m_buffers.end(),
+                         [id](const ChannelBuffer &buffer) {
+                             return buffer.id == id;
+                         });
+        if (found == m_buffers.end()) {
+            return Result<Unit, RichError>::error(
+                RichError{RichError::ErrorCode::INVALID_ARGUMENT,
+                          "removeChannel: unknown channel id"});
+        }
+        if (m_polling) {
+            m_pollingCv.wait(lock, [this] { return !m_polling; });
+        }
+
+        try {
+            const std::size_t index = static_cast<std::size_t>(
+                std::distance(m_buffers.begin(), found));
+            std::vector<ScopeChannelConfig> nextChannels = m_channels;
+            nextChannels.erase(nextChannels.begin() +
+                               static_cast<std::ptrdiff_t>(index));
+            const std::size_t tasks =
+                detail::plan_scope_reads(nextChannels).runs.size();
+            m_channels.swap(nextChannels);
+            m_buffers.erase(m_buffers.begin() +
+                            static_cast<std::ptrdiff_t>(index));
+            m_readTaskCount = tasks;
+            ++m_configVersion;
+            ++m_sequence;
+            m_cv.notify_all();
+        } catch (const std::bad_alloc &) {
+            return Result<Unit, RichError>::error(
+                RichError{RichError::ErrorCode::INTERNAL_ERROR,
+                          "removeChannel: allocation failed"});
         }
         return Result<Unit, RichError>::success(Unit{});
     }
@@ -501,9 +609,11 @@ public:
         result.sequence = m_sequence;
         result.lastError = m_lastError;
         result.lastSampleMs = m_lastSampleMs;
+        result.readTaskCount = m_readTaskCount;
         result.channels.reserve(m_buffers.size());
         for (const auto &buffer : m_buffers) {
             ScopeChannelSnapshot channel;
+            channel.id = buffer.id;
             channel.config = buffer.config;
             channel.samples.assign(buffer.samples.begin(),
                                    buffer.samples.end());
@@ -528,6 +638,7 @@ public:
 
 private:
     struct ChannelBuffer {
+        ChannelId id = 0;
         ScopeChannelConfig config;
         std::deque<ScopeSample> samples;
         bool hasValue = false;
@@ -536,13 +647,44 @@ private:
         double maximum = 0.0;
     };
 
+    // The channel list is mutable only when the worker cannot be inside a
+    // read: Paused (after pause()'s barrier) or Stopped (no worker).
+    bool editable_locked() const noexcept {
+        return m_run == ScopeRunState::Paused ||
+               (m_run == ScopeRunState::Stopped && !m_worker.joinable());
+    }
+
     void worker_loop() noexcept {
         for (;;) {
+            std::vector<ScopeChannelConfig> channels;
+            std::uint64_t version = 0;
+            LifeState transport = LifeState::IDLE;
             {
                 std::unique_lock<std::mutex> lock(m_mutex);
+                if (m_stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (m_paused.load(std::memory_order_acquire)) {
+                    // Wait for resume/stop instead of spinning on a predicate
+                    // that remains true for the whole pause.
+                    m_cv.wait(lock, [this] {
+                        return m_stop.load(std::memory_order_acquire) ||
+                               !m_paused.load(std::memory_order_acquire);
+                    });
+                    continue;
+                }
+                if (m_channels.empty()) {
+                    m_cv.wait_for(
+                        lock, std::chrono::milliseconds(m_pollIntervalMs),
+                        [this] {
+                            return m_stop.load(std::memory_order_acquire) ||
+                                   m_paused.load(std::memory_order_acquire) ||
+                                   !m_channels.empty();
+                        });
+                    continue;
+                }
                 m_cv.wait_for(
-                    lock,
-                    std::chrono::milliseconds(m_pollIntervalMs),
+                    lock, std::chrono::milliseconds(m_pollIntervalMs),
                     [this] {
                         return m_stop.load(std::memory_order_acquire) ||
                                m_paused.load(std::memory_order_acquire);
@@ -553,31 +695,54 @@ private:
                 if (m_paused.load(std::memory_order_acquire)) {
                     continue;
                 }
+                // Re-check the channel set: the interval wait above releases
+                // m_mutex, and removeChannel() may have emptied the list while
+                // the worker was asleep.
+                if (m_channels.empty()) {
+                    continue;
+                }
+                // Copy the current channel set and its version. The worker
+                // never dereferences m_channels after this point, so a future
+                // mutation cannot invalidate the read in flight.
+                channels = m_channels;
+                version = m_configVersion;
+                transport = m_transport;
+                m_polling = true;
             }
 
             try {
-                auto result = m_source->read(m_channels);
-                const LifeState transport = m_source->state();
+                auto result = m_source->read(channels);
+                transport = m_source->state();
                 if (result.is_fail()) {
-                    publish_error(transport, result.get_error()->context());
-                } else if (result.get()->size() != m_buffers.size()) {
-                    publish_error(transport,
+                    publish_error(version, transport,
+                                  result.get_error()->context());
+                } else if (result.get()->size() != channels.size()) {
+                    publish_error(version, transport,
                                   "source returned a mismatched channel count");
                 } else {
-                    publish_success(transport, *result.get());
+                    publish_success(version, transport, *result.get());
                 }
             } catch (const std::exception &error) {
-                publish_error(m_transport, error.what());
+                publish_error(version, transport, error.what());
             } catch (...) {
-                publish_error(m_transport, "scope source read threw");
+                publish_error(version, transport, "scope source read threw");
             }
+
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_polling = false;
+            }
+            m_pollingCv.notify_all();
         }
     }
 
-    void publish_success(LifeState transport, const std::vector<double> &values) {
+    void publish_success(std::uint64_t version, LifeState transport,
+                         const std::vector<double> &values) {
         const std::int64_t timestamp = now_ms();
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_stop.load(std::memory_order_acquire)) {
+        if (m_stop.load(std::memory_order_acquire) ||
+            version != m_configVersion ||
+            values.size() != m_buffers.size()) {
             return;
         }
         m_transport = transport;
@@ -606,9 +771,11 @@ private:
         ++m_sequence;
     }
 
-    void publish_error(LifeState transport, std::string context) {
+    void publish_error(std::uint64_t version, LifeState transport,
+                       std::string context) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_stop.load(std::memory_order_acquire)) {
+        if (m_stop.load(std::memory_order_acquire) ||
+            version != m_configVersion) {
             return;
         }
         m_transport = transport;
@@ -620,17 +787,22 @@ private:
     }
 
     std::unique_ptr<ScopeSource> m_source;
-    const std::vector<ScopeChannelConfig> m_channels;
+    std::vector<ScopeChannelConfig> m_channels;
     std::vector<ChannelBuffer> m_buffers;
+    std::size_t m_readTaskCount = 0;
+    ChannelId m_nextChannelId = 1;
+    std::uint64_t m_configVersion = 0;
     const std::uint32_t m_pollIntervalMs;
     const std::size_t m_historyCapacity;
 
-    std::mutex m_controlMutex; // serializes start/pause/resume/clear/stop
+    std::mutex m_controlMutex; // serializes start/pause/resume/add/remove/clear/stop
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
+    std::condition_variable m_pollingCv;
     std::thread m_worker;
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_paused{false};
+    bool m_polling = false; // guarded by m_mutex
     ScopeRunState m_run = ScopeRunState::Stopped;
     LifeState m_transport = LifeState::IDLE;
     std::uint64_t m_sequence = 0;
@@ -719,6 +891,22 @@ Result<Unit, RichError> ScopeModel::resume() noexcept {
                   : Result<Unit, RichError>::error(
                         RichError{RichError::ErrorCode::ALREADY_TERMINATED,
                                   "resume: scope model is null"});
+}
+
+Result<ChannelId, RichError>
+ScopeModel::addChannel(ScopeChannelConfig channel) noexcept {
+    return m_impl ? m_impl->addChannel(std::move(channel))
+                  : Result<ChannelId, RichError>::error(
+                        RichError{RichError::ErrorCode::ALREADY_TERMINATED,
+                                  "addChannel: scope model is null"});
+}
+
+Result<Unit, RichError>
+ScopeModel::removeChannel(ChannelId id) noexcept {
+    return m_impl ? m_impl->removeChannel(id)
+                  : Result<Unit, RichError>::error(
+                        RichError{RichError::ErrorCode::ALREADY_TERMINATED,
+                                  "removeChannel: scope model is null"});
 }
 
 Result<Unit, RichError> ScopeModel::clear() noexcept {
