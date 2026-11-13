@@ -6,8 +6,9 @@ namespace modbusscope {
 // Internal transport error code.
 //
 // This is the vocabulary of detail::ISdk, not the public API. Callers receive
-// RichError through Client; modbusscope.h does not include this header. Keep the
-// two layers separate so the public surface cannot grow a second error model.
+// RichError through Client; modbusscope.h does not include this header, and the
+// install rule excludes it. Keep the two layers separate so the public surface
+// cannot grow a second error model.
 //
 // Ok is only used as the default Error value; a successful Result never carries
 // ErrorCode::Ok.

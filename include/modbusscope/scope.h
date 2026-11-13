@@ -99,6 +99,9 @@ public:
 
     // Returns one scaled value per channel, in channel order. On failure the
     // values vector is not used and lastError is set by ScopeModel.
+    // The reference is valid only for the duration of the call: an
+    // implementation must copy anything it needs to keep. The call is
+    // synchronous; ScopeModel never invokes read() concurrently with itself.
     virtual Result<std::vector<double>, RichError>
     read(const std::vector<ScopeChannelConfig> &channels) = 0;
 

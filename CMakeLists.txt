@@ -90,7 +90,7 @@ add_subdirectory(
 )
 
 # Install/export support: consumers use
-#   find_package(modbusScope 0.1 CONFIG REQUIRED)
+#   find_package(modbusScope 0.2 CONFIG REQUIRED)
 #   target_link_libraries(app PRIVATE modbusScope::modbusScope)
 set(_install_targets modbusScope)
 if(MODBUSSCOPE_BUILD_GUI)
@@ -107,6 +107,9 @@ install(DIRECTORY
     ${InternalrootDir}/include/Rust_error_deal
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.h"
+    # error.h is the internal detail::ISdk vocabulary. Tests compile it from
+    # the source tree; installed consumers must use RichError only.
+    PATTERN "error.h" EXCLUDE
 )
 install(EXPORT modbusScopeTargets
     FILE modbusScopeTargets.cmake

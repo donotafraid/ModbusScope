@@ -43,7 +43,7 @@ finished features.
 
 ## Repository evidence
 
-- CTest registers 60 cases in a normal build (59 in a sanitizer build, where the
+- CTest registers 63 cases in a normal build (62 in a sanitizer build, where the
   installed-package consumer is skipped). The gtest suite uses `MockSdk` for the
   Client state machine and `FakeScopeSource` for the Scope model, including the
   pause barrier and dynamic add/remove. The
@@ -59,8 +59,6 @@ finished features.
   poll finishes.
 - `install_consumer` installs into a throwaway prefix and builds an out-of-tree
   `find_package(modbusScope)` consumer, so the export is exercised by CTest.
-- `.github/workflows/ci.yml` is checked in but was not executed in the review
-  session. Only local build/CTest/sanitizer evidence is available.
 
 ## Recommended next steps
 

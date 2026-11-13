@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -81,4 +82,58 @@ TEST(ClientLifetime, DestroyClientWhileReadIsStillInsideSdk) {
     EXPECT_EQ(modbusscope::test::MockSdk::stopCount().load(
                   std::memory_order_relaxed),
               1u);
+}
+
+// A timeout is a public uint32_t. Adding the drain/grace values in 32 bits
+// wraps for a value near UINT32_MAX: UINT32_MAX + 3000 becomes 2999 ms. The
+// shutdown would then report IN_FLIGHT_TIMEOUT after ~3 s even though the
+// configured request budget is ~49 days. The read is released after 3.5 s, so
+// this test only passes when the grace computation clamps before adding.
+TEST(ClientLifetime, HugeConfiguredTimeoutDoesNotWrapTheShutdownGrace) {
+    auto config = quickConfig();
+    config.requestTimeoutMs = std::numeric_limits<std::uint32_t>::max();
+    auto mock = std::make_unique<modbusscope::test::MockSdk>();
+    auto *raw = mock.get();
+    auto created = modbusscope::Client::createWithSdk(std::move(mock), config);
+    ASSERT_TRUE(created.is_success());
+    auto client = std::move(*created.get());
+    ASSERT_TRUE(client);
+
+    raw->blockNextRead();
+    std::thread reader([&] { (void)client->read(readRequest()); });
+    ASSERT_TRUE(raw->waitReadEntered(std::chrono::milliseconds(2000)));
+
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+        raw->releaseBlockedRead();
+    });
+    const auto shutdown = client->shutdown();
+    EXPECT_TRUE(shutdown.is_success());
+    reader.join();
+    releaser.join();
+}
+
+// shutdown() is documented as idempotent. After a timed-out drain, the last
+// in-flight call performs the deferred stop; a later shutdown() must observe
+// that terminal state rather than replay the historical timeout.
+TEST(ClientLifetime, SecondShutdownSucceedsAfterDeferredStop) {
+    auto mock = std::make_unique<modbusscope::test::MockSdk>();
+    auto *raw = mock.get();
+    auto created = modbusscope::Client::createWithSdk(std::move(mock),
+                                                      quickConfig());
+    ASSERT_TRUE(created.is_success());
+    auto client = std::move(*created.get());
+    ASSERT_TRUE(client);
+
+    raw->blockNextRead();
+    std::thread reader([&] { (void)client->read(readRequest()); });
+    ASSERT_TRUE(raw->waitReadEntered(std::chrono::milliseconds(2000)));
+
+    EXPECT_EQ(client->shutdown().get_error()->code(),
+              RichError::ErrorCode::IN_FLIGHT_TIMEOUT);
+    raw->releaseBlockedRead();
+    reader.join();
+
+    EXPECT_TRUE(client->shutdown().is_success());
+    EXPECT_EQ(client->state(), modbusscope::LifeState::CLOSED);
 }

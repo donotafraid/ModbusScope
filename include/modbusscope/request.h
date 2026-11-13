@@ -4,12 +4,29 @@
 
 namespace modbusscope {
 
+// Values are the on-wire Modbus function codes (MODBUS Application Protocol
+// V1.1b3, sections 6.3 and 6.4). Do not renumber them to match an enum index:
+// a consumer that logs or serializes the enum must see the same byte that goes
+// into the PDU.
 enum class FunctionCode : std::uint8_t {
-    ReadHoldingRegisters = 0x04,
-    ReadInputRegisters = 0x03,
+    ReadHoldingRegisters = 0x03,
+    ReadInputRegisters = 0x04,
     WriteSingleRegister = 0x06,
     WriteMultipleRegisters = 0x10,
 };
+
+static_assert(static_cast<std::uint8_t>(FunctionCode::ReadHoldingRegisters) ==
+                  0x03,
+              "0x03 is Read Holding Registers");
+static_assert(static_cast<std::uint8_t>(FunctionCode::ReadInputRegisters) ==
+                  0x04,
+              "0x04 is Read Input Registers");
+static_assert(static_cast<std::uint8_t>(FunctionCode::WriteSingleRegister) ==
+                  0x06,
+              "0x06 is Write Single Register");
+static_assert(static_cast<std::uint8_t>(FunctionCode::WriteMultipleRegisters) ==
+                  0x10,
+              "0x10 is Write Multiple Registers");
 
 // MODBUS Application Protocol V1.1b3 limits:
 //   0x03/0x04: 1..125 registers per request

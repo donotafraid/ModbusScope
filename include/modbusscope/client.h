@@ -60,6 +60,8 @@ public:
 
     // Connects if IDLE/RECOVERING. READY is a no-op. CLOSED/GIVEN_UP fail.
     // Returns only after the socket is connected or the attempt timed out.
+    // Calls are serialized, so the wall-clock wait can also include another
+    // caller's in-flight operation.
     Result<Unit, RichError> connect() noexcept;
 
     // Disconnects and disables automatic recovery. IDLE is a no-op.
@@ -69,10 +71,13 @@ public:
     // Blocking 0x03/0x04 read. Thread-safe.
     // The response is written only on success; on failure the caller's output
     // is untouched because the response is built on the worker thread.
+    // The request budget starts only after this call acquires the transport
+    // lock; queued callers can therefore observe a longer wall-clock wait.
     Result<ReadResponse, RichError> read(const ReadRequest &request) noexcept;
 
     // Blocking 0x06/0x10 write. Thread-safe; never retried automatically.
     // On success the response has been checked against the request echo.
+    // Shares the same serialization and latency rule as read().
     Result<WriteResponse, RichError> write(const WriteRequest &request) noexcept;
 
     // Atomic, non-blocking local state snapshot. It never round-trips to the
@@ -83,7 +88,8 @@ public:
     // Idempotent. Waits for in-flight calls, stops the watchdog and the
     // transport thread, then marks CLOSED. Returns IN_FLIGHT_TIMEOUT if the
     // drain deadline expires. In that case the transport is stopped by the
-    // last in-flight call when it leaves the implementation, not here.
+    // last in-flight call when it leaves the implementation, not here; a later
+    // shutdown() reports success once that deferred stop has completed.
     Result<Unit, RichError> shutdown() noexcept;
 
 private:

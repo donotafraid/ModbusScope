@@ -144,12 +144,14 @@ grid, traces, legend, status pill and hover readout with `QPainter`.
 ./build/bin/modbus_scope_demo --host 127.0.0.1 --port 15020 --interval 250
 ```
 
-Defaults: four holding registers at addresses 0..3, unit id 1, 250 ms poll
+Defaults: two holding registers at addresses 0..1, unit id 1, 250 ms poll
 interval, 600 samples per channel. The demo starts polling immediately and
 exposes Start / Pause / Resume / Clear / Add read object. While paused or
 stopped, Add opens a dialog for function code 0x03/0x04, address offset and unit
 id; every read object is a button with a delete key. `--paused` starts the demo
-in the editable paused state (useful for screenshots).
+in the editable paused state (useful for screenshots). `FunctionCode` numeric
+values are the on-wire Modbus codes: 0x03 is Read Holding Registers and 0x04 is
+Read Input Registers.
 
 Channels that share `(function, unitId)` and have contiguous addresses are
 merged into one Modbus request (up to 125 registers); duplicate addresses share a
@@ -225,7 +227,7 @@ GCC_LIBDIR=$(dirname "$(gcc -print-file-name=libstdc++.so)")
 
 ## Test
 
-CTest registers 60 cases:
+CTest registers 63 cases:
 
 - gtest: configuration and request validation, error mapping, the Client state
   machine with `MockSdk`, timeout escalation, recovery/GIVEN_UP, shutdown drain,

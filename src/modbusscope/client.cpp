@@ -24,6 +24,12 @@ static_assert(std::is_nothrow_destructible_v<Client>);
 
 constexpr std::uint16_t kLastAddress = 0xFFFF;
 
+// Upper bound for one configured operation. RealSdk's Qt timers already clamp
+// to this value; use the same bound for the drain and for the caller-side
+// future waits, otherwise a 32-bit timeout near UINT32_MAX can wrap when the
+// grace period is added. See docs/limitations.md.
+constexpr std::uint64_t kMaxOperationTimeoutMs = 600000;
+
 // Consecutive request timeouts before the transport is declared unhealthy.
 // A single slow reply must not tear down a healthy connection; repeated
 // timeouts are the only portable half-open signal when the peer never sends
@@ -362,7 +368,11 @@ public:
 
     Result<Unit, RichError> shutdown() noexcept {
         std::call_once(m_shutdownOnce, [this] { shutdown_impl(); });
-        if (m_shutdownTimedOut.load(std::memory_order_acquire)) {
+        // A deferred stop may have completed after the first call returned.
+        // Once the transport is actually stopped, the terminal state is clean
+        // even though the first shutdown reported IN_FLIGHT_TIMEOUT.
+        if (m_shutdownTimedOut.load(std::memory_order_acquire) &&
+            !m_transportStopped.load(std::memory_order_acquire)) {
             return Result<Unit, RichError>::error(
                 RichError{RichError::ErrorCode::IN_FLIGHT_TIMEOUT,
                           "shutdown: in-flight calls did not drain"});
@@ -489,11 +499,15 @@ private:
             // A caller waits at most operationTimeout + kSdkCallWaitGraceMs
             // inside RealSdk. Give the drain one more second for scheduling so
             // a healthy in-flight call is never reported as IN_FLIGHT_TIMEOUT.
-            const auto grace =
-                std::chrono::milliseconds(
+            // Compute in 64 bits and clamp before adding the grace: both
+            // operands are public uint32_t values and may be near UINT32_MAX.
+            const std::uint64_t operationTimeoutMs =
+                std::min<std::uint64_t>(
                     std::max<std::uint32_t>(m_config.requestTimeoutMs,
-                                            m_config.connectTimeoutMs) +
-                    detail::kSdkCallWaitGraceMs + 1000);
+                                            m_config.connectTimeoutMs),
+                    kMaxOperationTimeoutMs);
+            const auto grace = std::chrono::milliseconds(
+                operationTimeoutMs + detail::kSdkCallWaitGraceMs + 1000);
             drained = m_idleCv.wait_for(
                 lock, grace,
                 [this] { return m_inFlight == 0; });
@@ -519,6 +533,10 @@ private:
         std::call_once(m_transportStopOnce, [this] {
             m_sdk->stop();
             m_life.store(LifeState::CLOSED, std::memory_order_release);
+            // A deferred stop completes the first shutdown's work. A later
+            // shutdown() observes this flag instead of reporting the
+            // historical IN_FLIGHT_TIMEOUT forever.
+            m_transportStopped.store(true, std::memory_order_release);
         });
     }
 
@@ -608,6 +626,7 @@ private:
     int m_consecutiveTimeouts = 0;      // guarded by m_callMutex
     std::atomic<bool> m_shutdownTimedOut{false};
     std::atomic<bool> m_stopTransportWhenIdle{false};
+    std::atomic<bool> m_transportStopped{false};
     std::once_flag m_transportStopOnce;
 
     std::thread m_watchdog;

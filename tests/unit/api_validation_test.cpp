@@ -251,3 +251,17 @@ TEST(ClientState, ShutdownIsIdempotentAndTerminal) {
     EXPECT_EQ(fixture.client->connect().get_error()->code(),
               RichError::ErrorCode::ALREADY_TERMINATED);
 }
+
+// The enum is part of the public API: a consumer may log it, put it in a
+// ScopeChannelConfig, or use it to build a raw PDU. Its numeric value must be
+// the Modbus function code, not an arbitrary enum index.
+TEST(FunctionCode, MatchesTheModbusWireValues) {
+    using modbusscope::FunctionCode;
+    EXPECT_EQ(static_cast<std::uint8_t>(FunctionCode::ReadHoldingRegisters),
+              0x03);
+    EXPECT_EQ(static_cast<std::uint8_t>(FunctionCode::ReadInputRegisters), 0x04);
+    EXPECT_EQ(static_cast<std::uint8_t>(FunctionCode::WriteSingleRegister),
+              0x06);
+    EXPECT_EQ(static_cast<std::uint8_t>(FunctionCode::WriteMultipleRegisters),
+              0x10);
+}

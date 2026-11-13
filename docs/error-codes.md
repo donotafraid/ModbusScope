@@ -14,7 +14,7 @@ internal `detail::ISdk` vocabulary and is not included by the aggregate header.
 | `SERVICE_FAILED` | `read` / `write` | Modbus exception, malformed PDU, wrong function/address/quantity echo, response length mismatch | Depends on the exception | Inspect `context()`; do not blind-retry a write |
 | `SDK_ERROR` | `create` | No `QCoreApplication`, transport thread did not start, system error | No | Create the application object once, then retry |
 | `ALREADY_TERMINATED` | any method | `Client` already shut down, or internal pointer is null | No | Recreate the client |
-| `IN_FLIGHT_TIMEOUT` | `shutdown` | Drain deadline expired; transport was still stopped | No | Treat as a failed clean shutdown; inspect the process |
+| `IN_FLIGHT_TIMEOUT` | `shutdown` | Drain deadline expired; the transport was left running for the last in-flight call | No | Treat the first call as a failed clean shutdown; the last caller stops the transport, and a later `shutdown()` observes it |
 | `INTERNAL_ERROR` | any method | Allocation failure or unexpected exception | Unknown | Log and recreate |
 | `UNKNOWN` | fallback | Unclassified failure | Unknown | Log |
 

@@ -50,8 +50,20 @@ ErrorCode map_device_error(QModbusDevice::Error error) noexcept {
     return ErrorCode::Internal;
 }
 
+// Same bound as Client::Impl::kMaxOperationTimeoutMs. Keeping it local avoids
+// installing a detail header just for one constant.
+constexpr std::uint64_t kMaxTimeoutMs = 600000;
+
+std::uint64_t caller_wait_ms(std::uint32_t timeoutMs) noexcept {
+    // Clamp before adding the grace. A raw uint32_t + 2000 wraps for a
+    // configured value near UINT32_MAX and would turn a multi-minute budget
+    // into a ~2 s false timeout.
+    return std::min<std::uint64_t>(timeoutMs, kMaxTimeoutMs) +
+           kSdkCallWaitGraceMs;
+}
+
 int bounded_timeout(std::uint32_t timeoutMs) noexcept {
-    const auto capped = std::min<std::uint64_t>(timeoutMs, 600000);
+    const auto capped = std::min<std::uint64_t>(timeoutMs, kMaxTimeoutMs);
     return static_cast<int>(std::max<std::uint64_t>(capped, 10));
 }
 
@@ -557,9 +569,11 @@ public:
         quit();
         if (!wait(5000)) {
             // The transport is intentionally small and has no unbounded loops.
-            // Reaching here means a Qt event loop is wedged. terminate() skips
-            // stack unwinding, so it is the last resort; wait() is required
-            // before QThread destruction.
+            // Reaching here means a Qt event loop is wedged. Qt documents
+            // terminate() as dangerous: the thread can be stopped while
+            // modifying data and cannot unlock mutexes or unwind. It is used
+            // only because QThread must not be destroyed while running; treat
+            // this as a process-exit backstop, never as a normal close path.
             terminate();
             wait();
         }
@@ -679,8 +693,13 @@ ErrorCode RealSdk::connect(const TcpEndpoint &endpoint, std::uint32_t timeoutMs,
     if (!posted) {
         return ErrorCode::Internal;
     }
+    // The wait is a caller-side safety net, not cancellation. If it expires,
+    // the queued lambda may still be inside the operation's nested event loop.
+    // Do not post a second operation for the same transport until that
+    // invocation has been observed to finish; a nested loop also dispatches
+    // queued invokeMethod() calls.
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
+            caller_wait_ms(timeoutMs))) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -729,8 +748,13 @@ ErrorCode RealSdk::disconnect(std::uint32_t timeoutMs, std::string *detail) {
     if (!posted) {
         return ErrorCode::Internal;
     }
+    // The wait is a caller-side safety net, not cancellation. If it expires,
+    // the queued lambda may still be inside the operation's nested event loop.
+    // Do not post a second operation for the same transport until that
+    // invocation has been observed to finish; a nested loop also dispatches
+    // queued invokeMethod() calls.
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
+            caller_wait_ms(timeoutMs))) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -782,8 +806,13 @@ ErrorCode RealSdk::read(const ReadRequest &request, std::uint32_t timeoutMs,
     if (!posted) {
         return ErrorCode::Internal;
     }
+    // The wait is a caller-side safety net, not cancellation. If it expires,
+    // the queued lambda may still be inside the operation's nested event loop.
+    // Do not post a second operation for the same transport until that
+    // invocation has been observed to finish; a nested loop also dispatches
+    // queued invokeMethod() calls.
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
+            caller_wait_ms(timeoutMs))) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
@@ -838,8 +867,13 @@ ErrorCode RealSdk::write(const WriteRequest &request, std::uint32_t timeoutMs,
     if (!posted) {
         return ErrorCode::Internal;
     }
+    // The wait is a caller-side safety net, not cancellation. If it expires,
+    // the queued lambda may still be inside the operation's nested event loop.
+    // Do not post a second operation for the same transport until that
+    // invocation has been observed to finish; a nested loop also dispatches
+    // queued invokeMethod() calls.
     if (future.wait_for(std::chrono::milliseconds(
-            timeoutMs + kSdkCallWaitGraceMs)) != std::future_status::ready) {
+            caller_wait_ms(timeoutMs))) != std::future_status::ready) {
         return ErrorCode::Timeout;
     }
     if (call->exception) {
