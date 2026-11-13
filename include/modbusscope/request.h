@@ -5,8 +5,8 @@
 namespace modbusscope {
 
 enum class FunctionCode : std::uint8_t {
-    ReadHoldingRegisters = 0x03,
-    ReadInputRegisters = 0x04,
+    ReadHoldingRegisters = 0x04,
+    ReadInputRegisters = 0x03,
     WriteSingleRegister = 0x06,
     WriteMultipleRegisters = 0x10,
 };

@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
     config.recoveryWindowMs = 5000;
 
     std::vector<modbusscope::ScopeChannelConfig> channels;
-    for (std::uint16_t address = 0; address < 4; ++address) {
+    for (std::uint16_t address = 0; address < 2; ++address) {
         modbusscope::ScopeChannelConfig channel;
         channel.name = "Reg " + std::to_string(address);
         channel.function =
@@ -219,7 +219,7 @@ int main(int argc, char **argv) {
     auto *central = new QWidget(&window);
     central->setObjectName(QStringLiteral("central"));
     central->setStyleSheet(QStringLiteral(
-        "QFrame#channelCard { background: #111827; border: 1px solid #334155;"
+        "QFrame#channelCard { background:rgb(87, 121, 194); border: 1px solid #334155;"
         " border-radius: 14px; }"
         "QPushButton#channelChip { border: none; background: transparent;"
         " color: #e2e8f0; padding: 2px 4px; text-align: left; }"
