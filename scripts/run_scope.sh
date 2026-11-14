@@ -5,6 +5,7 @@
 #   ./scripts/run_scope.sh --host 192.0.2.10       # existing PLC, no server
 #   ./scripts/run_scope.sh --screenshot scope.png  # offscreen evidence
 #   ./scripts/run_scope.sh --paused                # start in editable pause
+#   ./scripts/run_scope.sh --no-server
 #
 # Environment:
 #   BUILD_DIR   build tree (default: build)
@@ -19,7 +20,7 @@ cd "$(qm_project_root)"
 
 BUILD_DIR=${BUILD_DIR:-build}
 HOST=127.0.0.1
-PORT=15020
+PORT=5020
 INTERVAL=250
 SCREENSHOT=""
 START_SERVER=1
